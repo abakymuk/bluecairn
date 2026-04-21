@@ -4,10 +4,11 @@ import { TenantId, newTenantContext } from '@bluecairn/core'
 import { createDatabase, withTenant, schema } from '@bluecairn/db'
 import { extractInboundMessage, parseUpdate } from '@bluecairn/integrations/telegram'
 import { env } from '../../env.js'
+import { inngest } from '../../inngest.js'
 import { logger } from '../../lib/logger.js'
 
 /**
- * Telegram webhook endpoint — receive, parse, persist.
+ * Telegram webhook endpoint — receive, parse, persist, emit.
  *
  * Flow:
  *   1. Verify the secret token header (rejects spoofed calls).
@@ -19,11 +20,17 @@ import { logger } from '../../lib/logger.js'
  *   5. Within `withTenant(ctx)` (sets RLS session var), find-or-create a
  *      thread on this channel and insert the message (idempotent on
  *      `tenant_id + idempotency_key = tg:<chat_id>:<message_id>`).
- *   6. Return 200 within Telegram's 5s window. Outbound replies are out of
- *      scope for BLU-13 (Comms MCP, Month 1).
+ *   6. If the insert actually produced a new row AND `ORCHESTRATOR_ENABLED`
+ *      is true (BLU-19), emit `thread.message.received` to Inngest so the
+ *      orchestrator can route it. Bounded by a 2s timeout so we never push
+ *      the webhook past Telegram's 5s budget. Emit failure is logged but
+ *      does not fail the webhook — the message is persisted regardless.
+ *   7. Return 200 within Telegram's 5s window.
  *
- * See BLU-13, BLU-4, BLU-9, ADR-0009.
+ * See BLU-13, BLU-19, ADR-0004, ADR-0009.
  */
+
+const EMIT_TIMEOUT_MS = 2000
 
 /**
  * Admin pool: used at the webhook boundary for channel → tenant resolution
@@ -93,7 +100,7 @@ telegramWebhook.post('/', async (c) => {
   })
 
   try {
-    await withTenant(db, ctx, async (tx) => {
+    const { threadId, messageId } = await withTenant(db, ctx, async (tx) => {
       let [thread] = await tx
         .select({ id: schema.threads.id })
         .from(schema.threads)
@@ -120,7 +127,11 @@ telegramWebhook.post('/', async (c) => {
       // targetless form of ON CONFLICT lets Postgres pick any applicable
       // unique constraint at runtime. Specifying the target explicitly is
       // incompatible with partial indexes.
-      await tx
+      //
+      // `.returning({ id })` combined with `.onConflictDoNothing()` returns
+      // an empty array on conflict, letting us skip the Inngest emit for
+      // duplicate deliveries (BLU-19 idempotency acceptance criterion).
+      const inserted = await tx
         .insert(schema.messages)
         .values({
           tenantId: channel.tenantId,
@@ -131,11 +142,14 @@ telegramWebhook.post('/', async (c) => {
           idempotencyKey: msg.idempotencyKey,
         })
         .onConflictDoNothing()
+        .returning({ id: schema.messages.id })
 
       await tx
         .update(schema.threads)
         .set({ lastMessageAt: msg.sentAt })
         .where(eq(schema.threads.id, thread.id))
+
+      return { threadId: thread.id, messageId: inserted[0]?.id ?? null }
     })
 
     logger.info('Telegram message persisted', {
@@ -143,7 +157,49 @@ telegramWebhook.post('/', async (c) => {
       tenantId: channel.tenantId,
       chatId: msg.chatId,
       idempotencyKey: msg.idempotencyKey,
+      duplicate: messageId === null,
     })
+
+    if (env.ORCHESTRATOR_ENABLED && messageId !== null) {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        await Promise.race([
+          inngest.send({
+            name: 'thread.message.received',
+            data: {
+              tenant_id: channel.tenantId,
+              correlation_id: correlationId,
+              idempotency_key: msg.idempotencyKey,
+              thread_id: threadId,
+              message_id: messageId,
+              channel_id: channel.id,
+            },
+          }),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error(`inngest emit timeout after ${EMIT_TIMEOUT_MS}ms`)),
+              EMIT_TIMEOUT_MS,
+            )
+          }),
+        ])
+        logger.info('thread.message.received emitted', {
+          correlationId,
+          tenantId: channel.tenantId,
+          messageId,
+        })
+      } catch (err) {
+        // Persist already succeeded; the event can be replayed manually from
+        // Inngest dashboard or a dead-letter handler. Never fail the webhook.
+        logger.error('Inngest emit failed', {
+          correlationId,
+          tenantId: channel.tenantId,
+          messageId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      } finally {
+        if (timer !== undefined) clearTimeout(timer)
+      }
+    }
   } catch (err) {
     logger.error('Telegram message persistence failed', {
       correlationId,

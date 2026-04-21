@@ -18,7 +18,8 @@
     "OPENAI_API_KEY",
     "GOOGLE_GENERATIVE_AI_API_KEY",
     "INNGEST_EVENT_KEY",
-    "INNGEST_SIGNING_KEY"
+    "INNGEST_SIGNING_KEY",
+    "ORCHESTRATOR_ENABLED"
   ],
   "tasks": {
     "build": {
