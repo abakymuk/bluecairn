@@ -1,20 +1,33 @@
-import { afterAll, beforeAll, describe, expect, test } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import postgres from 'postgres'
-import { app } from '../src/index.js'
 
 /**
- * Integration test for the Telegram webhook handler (BLU-13).
+ * Integration test for the Telegram webhook handler (BLU-13, extended for
+ * BLU-19 orchestrator event emit).
  *
  * Flow:
  *   - admin conn (DATABASE_URL_ADMIN, bypasses RLS as table owner) seeds a
  *     test tenant + Telegram channel with a unique chat_id.
  *   - test posts mock Telegram Update payloads into the Hono app via
  *     `app.fetch(new Request(...))` — no HTTP server boot needed.
- *   - admin conn verifies the resulting DB state.
+ *   - admin conn verifies the resulting DB state; mocked `inngest.send`
+ *     verifies event emission semantics (BLU-19).
  *
  * Requires env: DATABASE_URL, DATABASE_URL_ADMIN, TELEGRAM_WEBHOOK_SECRET.
  * Run via: doppler run --config dev -- bun run --cwd apps/api test
  */
+
+// Stub the Inngest client so we can assert on emits without hitting the wire.
+const { mockInngestSend } = vi.hoisted(() => ({
+  mockInngestSend: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('../src/inngest.js', () => ({
+  inngest: { send: mockInngestSend },
+}))
+
+// Import after vi.mock so the webhook's `inngest` resolves to the stub.
+const { app } = await import('../src/index.js')
 
 const adminUrl = process.env.DATABASE_URL_ADMIN
 const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET
@@ -52,6 +65,10 @@ afterAll(async () => {
   await admin.end()
 })
 
+beforeEach(() => {
+  mockInngestSend.mockClear()
+})
+
 /**
  * Build a minimal Telegram Update with a text message.
  * message_id must be unique per test to exercise idempotency key handling.
@@ -80,7 +97,7 @@ const postWebhook = (body: unknown, secret: string | null = webhookSecret) => {
 }
 
 describe('Telegram webhook', () => {
-  test('persists inbound text message for a known channel', async () => {
+  test('persists inbound text message for a known channel + emits event (BLU-19)', async () => {
     const messageId = Math.floor(Math.random() * 1e9)
     const res = await postWebhook(
       mockMessageUpdate({ messageId, text: 'hello from integration test' }),
@@ -88,9 +105,9 @@ describe('Telegram webhook', () => {
     expect(res.status).toBe(200)
 
     const rows = await admin<
-      { content: string; idempotency_key: string; external_message_id: string }[]
+      { id: string; content: string; idempotency_key: string; external_message_id: string }[]
     >`
-      SELECT content, idempotency_key, external_message_id
+      SELECT id, content, idempotency_key, external_message_id
       FROM   messages
       WHERE  tenant_id = ${tenantId}
         AND  external_message_id = ${String(messageId)}
@@ -104,9 +121,24 @@ describe('Telegram webhook', () => {
       SELECT id FROM threads WHERE channel_id = ${channelId}
     `
     expect(threads).toHaveLength(1)
+
+    // BLU-19: exactly one thread.message.received event emitted, carrying
+    // the canonical payload the orchestrator expects.
+    expect(mockInngestSend).toHaveBeenCalledTimes(1)
+    expect(mockInngestSend).toHaveBeenCalledWith({
+      name: 'thread.message.received',
+      data: expect.objectContaining({
+        tenant_id: tenantId,
+        thread_id: threads[0]?.id,
+        message_id: rows[0]?.id,
+        channel_id: channelId,
+        idempotency_key: `tg:${TEST_CHAT_ID}:${messageId}`,
+        correlation_id: expect.any(String),
+      }),
+    })
   })
 
-  test('duplicate update with same message_id is idempotent', async () => {
+  test('duplicate update with same message_id is idempotent + zero extra emits (BLU-19)', async () => {
     const messageId = Math.floor(Math.random() * 1e9)
     const payload = mockMessageUpdate({ messageId, text: 'duplicate attempt' })
 
@@ -120,9 +152,13 @@ describe('Telegram webhook', () => {
       WHERE  tenant_id = ${tenantId} AND external_message_id = ${String(messageId)}
     `
     expect(rows).toHaveLength(1)
+
+    // First delivery emits; second (conflict) must NOT re-emit. So exactly 1
+    // send across the two requests. BLU-19 idempotency acceptance criterion.
+    expect(mockInngestSend).toHaveBeenCalledTimes(1)
   })
 
-  test('unknown chat_id: 200 + no persistence', async () => {
+  test('unknown chat_id: 200 + no persistence + no emit', async () => {
     const strangerChatId = '-999888777'
     const messageId = Math.floor(Math.random() * 1e9)
     const res = await postWebhook(
@@ -138,6 +174,7 @@ describe('Telegram webhook', () => {
       WHERE  m.external_message_id = ${String(messageId)}
     `
     expect(rows).toHaveLength(0)
+    expect(mockInngestSend).not.toHaveBeenCalled()
   })
 
   test('missing secret header → 401', async () => {

@@ -34,6 +34,18 @@ const envSchema = z.object({
   // treated as unset. Actual usage fails loudly at call time if needed.
   ANTHROPIC_API_KEY: z.string().startsWith('sk-ant-').optional().catch(undefined),
   OPENAI_API_KEY: z.string().startsWith('sk-').optional().catch(undefined),
+
+  // Inngest (ADR-0004) — optional so local dev can run against the Inngest
+  // dev CLI without a cloud key. Staging/prod populate from Doppler.
+  INNGEST_EVENT_KEY: z.string().min(1).optional(),
+
+  // Orchestrator feature flag (BLU-19). When false, the webhook falls back
+  // to the M0 inline path (persist only, no event emit). Default true on
+  // dev/staging; toggle via Doppler if the orchestrator misbehaves.
+  ORCHESTRATOR_ENABLED: z
+    .string()
+    .transform((v) => v === 'true' || v === '1')
+    .default('true'),
 })
 
 const parsed = envSchema.safeParse(process.env)
