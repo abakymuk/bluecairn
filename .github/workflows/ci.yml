@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel in-progress runs on the same branch when a new push arrives.
+# Keeps CI minutes focused on the latest commit.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: bluecairn
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      # --- DB bootstrap inputs (consumed by setup-ci-db.sh) ---
+      POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/bluecairn
+      ADMIN_URL: postgresql://bluecairn_admin:ci_admin_password_16chars@localhost:5432/bluecairn
+      BLUECAIRN_APP_PASSWORD: ci_app_password_16chars
+      BLUECAIRN_ADMIN_PASSWORD: ci_admin_password_16chars
+
+      # --- Env schema (consumed by apps/api at import + by tests) ---
+      DATABASE_URL: postgresql://bluecairn_app:ci_app_password_16chars@localhost:5432/bluecairn
+      DATABASE_URL_ADMIN: postgresql://bluecairn_admin:ci_admin_password_16chars@localhost:5432/bluecairn
+      TELEGRAM_BOT_TOKEN: "0000000000:TEST-TOKEN-CI-ONLY-NEVER-LIVE"
+      TELEGRAM_WEBHOOK_SECRET: ci-test-webhook-secret-do-not-use-in-production-envs
+      NODE_ENV: test
+      LOG_LEVEL: warn
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.2"
+
+      - name: Install psql client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+
+      - name: Cache Turbo
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Bootstrap database
+        run: bash packages/db/scripts/setup-ci-db.sh
+
+      # Parallel-where-possible via turbo's task graph. typecheck and lint
+      # don't depend on each other, so --parallel is safe.
+      - name: Typecheck
+        run: bunx turbo typecheck
+
+      - name: Lint
+        run: bunx turbo lint
+
+      - name: Test
+        run: bunx turbo test
+
+      - name: Build
+        run: bunx turbo build

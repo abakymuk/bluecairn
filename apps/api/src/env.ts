@@ -28,9 +28,12 @@ const envSchema = z.object({
   LANGFUSE_PUBLIC_KEY: z.string().optional(),
   LANGFUSE_SECRET_KEY: z.string().optional(),
 
-  // LLM providers
-  ANTHROPIC_API_KEY: z.string().startsWith('sk-ant-').optional(),
-  OPENAI_API_KEY: z.string().startsWith('sk-').optional(),
+  // LLM providers. Prefixed-optional keys use .catch(undefined) so a parent
+  // shell leaking a non-matching value (e.g. Claude Code setting
+  // ANTHROPIC_API_KEY for its own use) doesn't break boot — the key is
+  // treated as unset. Actual usage fails loudly at call time if needed.
+  ANTHROPIC_API_KEY: z.string().startsWith('sk-ant-').optional().catch(undefined),
+  OPENAI_API_KEY: z.string().startsWith('sk-').optional().catch(undefined),
 })
 
 const parsed = envSchema.safeParse(process.env)
