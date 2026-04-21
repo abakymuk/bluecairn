@@ -11,16 +11,23 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
-    "test": "echo 'stub package — no tests'",
+    "test": "vitest run --passWithNoTests",
+    "smoke:langfuse": "bun run scripts/smoke-langfuse.ts",
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^1",
     "@bluecairn/core": "workspace:*",
     "@bluecairn/db": "workspace:*",
-    "@bluecairn/memory": "workspace:*"
+    "@bluecairn/memory": "workspace:*",
+    "@langfuse/otel": "^4",
+    "@langfuse/tracing": "^4",
+    "@opentelemetry/sdk-trace-node": "^2",
+    "ai": "^4"
   },
   "devDependencies": {
     "@types/bun": "^1.2.0",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
   }
 }
