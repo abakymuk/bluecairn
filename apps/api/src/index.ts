@@ -18,7 +18,7 @@ import { telegramWebhook } from './routes/webhooks/telegram.js'
  * See ENGINEERING.md § Running locally.
  */
 
-const app = new Hono()
+export const app = new Hono()
 
 app.get('/health', (c) =>
   c.json({
