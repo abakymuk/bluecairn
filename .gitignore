@@ -1,0 +1,54 @@
+# Dependencies
+node_modules
+.bun
+.pnp
+.pnp.js
+
+# Environment
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Build outputs
+dist
+build
+.next
+out
+.turbo
+*.tsbuildinfo
+
+# Testing
+coverage
+.nyc_output
+eval-results
+
+# Logs
+*.log
+npm-debug.log*
+bun-debug.log*
+
+# IDE
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local Claude Code data (project-specific)
+.claude/local/
+
+# Drizzle generated migrations are committed; metadata is not
+packages/db/migrations/meta/
+
+# Secrets — never commit
+*.pem
+*.key
+secrets.json

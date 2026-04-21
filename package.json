@@ -1,0 +1,38 @@
+{
+  "name": "bluecairn",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Operational partner for independent restaurants, delivered through chat.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev --parallel",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "eval": "turbo run eval",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "db:generate": "bun run --cwd packages/db drizzle-kit generate",
+    "db:push": "bun run --cwd packages/db drizzle-kit push",
+    "db:studio": "bun run --cwd packages/db drizzle-kit studio",
+    "db:bootstrap": "bun run --cwd packages/db scripts/bootstrap-internal-tenant.ts",
+    "clean": "turbo run clean && rm -rf node_modules"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "@types/node": "^22.0.0",
+    "eslint": "^9.15.0",
+    "prettier": "^3.4.2",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "bun": ">=1.2.0",
+    "node": ">=22.0.0"
+  },
+  "packageManager": "bun@1.2.0"
+}
