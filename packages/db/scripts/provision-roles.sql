@@ -58,6 +58,12 @@ GRANT USAGE   ON SCHEMA   public    TO bluecairn_app, bluecairn_admin;
 -- only grants USAGE; CREATE must be granted explicitly.
 GRANT CREATE  ON SCHEMA   public    TO bluecairn_admin;
 
+-- `CREATE EXTENSION` is a database-level operation, not schema-level. Without
+-- this grant, `psql $DATABASE_URL_ADMIN -c 'CREATE EXTENSION vector'` errors
+-- with "permission denied to create extension". Grant as the database owner
+-- (neondb_owner on Neon) when running this script.
+GRANT CREATE  ON DATABASE bluecairn TO bluecairn_admin;
+
 -- =============================================================================
 -- 3. Verification
 -- =============================================================================

@@ -10,6 +10,7 @@ Operational scripts for the Postgres (Neon) backend. Not part of the published `
 | `bootstrap-internal-tenant.ts` | Seed the `bluecairn-internal` tenant for dogfooding | BLU-14 |
 | `setup-ci-db.sh` | One-shot full bootstrap for CI / clean-room Docker Postgres | BLU-15 |
 | `migrate-staging-initial.sh` | One-time initial migration of the staging Neon branch | BLU-17 |
+| `add-internal-telegram-channel.sql` | Add a secondary Telegram chat_id to the `bluecairn-internal` tenant (e.g. onboarding Nick, a second device) | follow-up |
 
 ---
 
