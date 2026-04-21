@@ -27,7 +27,9 @@ export const tenants = pgTable(
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
   },
   (table) => [
-    index('idx_tenants_status').on(table.status).where(sql`${table.deletedAt} is null`),
+    index('idx_tenants_status')
+      .on(table.status)
+      .where(sql`${table.deletedAt} is null`),
   ],
 )
 

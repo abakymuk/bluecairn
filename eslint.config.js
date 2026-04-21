@@ -78,4 +78,40 @@ export default tseslint.config(
       'no-console': 'off',
     },
   },
+
+  // Package boundary rules — enforce dependency directions from ENGINEERING.md.
+  // Apps (apps/*) are unrestricted. For each package, list the workspace names
+  // that must NOT be imported. Violations surface as lint errors, catching
+  // drift before it becomes entrenched.
+  ...boundaryOverrides(),
 )
+
+function boundaryOverrides() {
+  const deny = (files, forbidden) => ({
+    files,
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: forbidden.map((name) => ({
+            group: [`@bluecairn/${name}`, `@bluecairn/${name}/*`],
+            message: `boundary: this package may not depend on @bluecairn/${name}`,
+          })),
+        },
+      ],
+    },
+  })
+
+  return [
+    deny(
+      ['packages/core/**/*.ts'],
+      ['db', 'memory', 'agents', 'integrations', 'mcp-servers', 'evals'],
+    ),
+    deny(['packages/db/**/*.ts'], ['memory', 'agents', 'integrations', 'mcp-servers', 'evals']),
+    deny(['packages/integrations/**/*.ts'], ['db', 'memory', 'agents', 'mcp-servers', 'evals']),
+    deny(['packages/memory/**/*.ts'], ['agents', 'integrations', 'mcp-servers', 'evals']),
+    deny(['packages/agents/**/*.ts'], ['integrations', 'mcp-servers', 'evals']),
+    deny(['packages/mcp-servers/**/*.ts'], ['memory', 'agents', 'evals']),
+    deny(['packages/evals/**/*.ts'], ['db', 'memory', 'integrations', 'mcp-servers']),
+  ]
+}

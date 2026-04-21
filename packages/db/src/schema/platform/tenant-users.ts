@@ -25,8 +25,12 @@ export const tenantUsers = pgTable(
   },
   (table) => [
     unique('tenant_users_tenant_user_unique').on(table.tenantId, table.userId),
-    index('idx_tenant_users_tenant').on(table.tenantId).where(sql`${table.revokedAt} is null`),
-    index('idx_tenant_users_user').on(table.userId).where(sql`${table.revokedAt} is null`),
+    index('idx_tenant_users_tenant')
+      .on(table.tenantId)
+      .where(sql`${table.revokedAt} is null`),
+    index('idx_tenant_users_user')
+      .on(table.userId)
+      .where(sql`${table.revokedAt} is null`),
   ],
 )
 

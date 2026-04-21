@@ -2,6 +2,7 @@
   "name": "bluecairn",
   "private": true,
   "version": "0.0.0",
+  "type": "module",
   "description": "Operational partner for independent restaurants, delivered through chat.",
   "workspaces": [
     "apps/*",

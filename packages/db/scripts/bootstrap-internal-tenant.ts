@@ -32,10 +32,7 @@ async function bootstrap() {
 
   // 1. Tenant
   const tenantSlug = 'bluecairn-internal'
-  let [tenant] = await db
-    .select()
-    .from(schema.tenants)
-    .where(eq(schema.tenants.slug, tenantSlug))
+  let [tenant] = await db.select().from(schema.tenants).where(eq(schema.tenants.slug, tenantSlug))
 
   if (!tenant) {
     ;[tenant] = await db

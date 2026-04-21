@@ -21,7 +21,9 @@ export const channels = pgTable(
     externalId: text('external_id').notNull(), // telegram chat_id, twilio SID, etc.
     phoneE164: text('phone_e164'),
     displayName: text('display_name'),
-    config: jsonb('config').notNull().default(sql`'{}'::jsonb`),
+    config: jsonb('config')
+      .notNull()
+      .default(sql`'{}'::jsonb`),
     isPrimary: boolean('is_primary').notNull().default(false),
     active: boolean('active').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

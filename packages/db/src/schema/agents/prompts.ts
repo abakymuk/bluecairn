@@ -1,5 +1,14 @@
 import { sql } from 'drizzle-orm'
-import { boolean, index, integer, pgTable, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core'
+import {
+  boolean,
+  index,
+  integer,
+  pgTable,
+  text,
+  timestamp,
+  unique,
+  uuid,
+} from 'drizzle-orm/pg-core'
 import { users } from '../platform/users.js'
 import { agentDefinitions } from './agent-definitions.js'
 

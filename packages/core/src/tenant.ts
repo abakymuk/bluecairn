@@ -28,6 +28,8 @@ export const newTenantContext = (params: {
   correlationId?: string
 }): TenantContext => ({
   tenantId: params.tenantId,
-  requestedByUserId: params.requestedByUserId,
+  ...(params.requestedByUserId !== undefined && {
+    requestedByUserId: params.requestedByUserId,
+  }),
   correlationId: params.correlationId ?? crypto.randomUUID(),
 })

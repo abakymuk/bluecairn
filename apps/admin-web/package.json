@@ -1,0 +1,23 @@
+{
+  "name": "@bluecairn/admin-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "echo 'admin-web skeleton — not implemented'",
+    "build": "echo 'admin-web skeleton — no build'",
+    "start": "echo 'admin-web skeleton — no start'",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "echo 'stub package — no tests'",
+    "clean": "rm -rf dist .turbo"
+  },
+  "dependencies": {
+    "@bluecairn/core": "workspace:*",
+    "@bluecairn/db": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.7.2"
+  }
+}

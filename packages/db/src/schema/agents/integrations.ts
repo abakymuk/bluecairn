@@ -30,14 +30,18 @@ export const integrations = pgTable(
     scopes: text('scopes').array(),
     lastSyncAt: timestamp('last_sync_at', { withTimezone: true }),
     lastError: text('last_error'),
-    config: jsonb('config').notNull().default(sql`'{}'::jsonb`),
+    config: jsonb('config')
+      .notNull()
+      .default(sql`'{}'::jsonb`),
     connectedAt: timestamp('connected_at', { withTimezone: true }),
     disconnectedAt: timestamp('disconnected_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    index('idx_integrations_tenant').on(table.tenantId).where(sql`${table.status} = 'active'`),
+    index('idx_integrations_tenant')
+      .on(table.tenantId)
+      .where(sql`${table.status} = 'active'`),
   ],
 )
 

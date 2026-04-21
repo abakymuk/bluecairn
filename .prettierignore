@@ -1,0 +1,17 @@
+# Generated / vendored
+node_modules
+dist
+.next
+.turbo
+coverage
+eval-results
+bun.lock
+
+# Docs are authored manually; prettier's line-wrapping rules disagree with how
+# they're written. Excluded from formatting checks.
+docs/
+README.md
+.claude/CLAUDE.md
+
+# Drizzle-generated SQL
+packages/db/migrations/

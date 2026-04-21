@@ -29,8 +29,7 @@ export const memoryEntries = pgTable(
     index('idx_memory_tenant_kind')
       .on(table.tenantId, table.kind)
       .where(sql`${table.archivedAt} is null`),
-    index('idx_memory_embedding')
-      .using('hnsw', table.contentEmbedding.op('vector_cosine_ops')),
+    index('idx_memory_embedding').using('hnsw', table.contentEmbedding.op('vector_cosine_ops')),
   ],
 )
 

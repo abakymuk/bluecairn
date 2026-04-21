@@ -26,7 +26,10 @@ export const withTenant = async <T>(
   return db.transaction(async (tx) => {
     await tx.execute(sql`set local app.current_tenant = ${ctx.tenantId}`)
     await tx.execute(sql`set local app.correlation_id = ${ctx.correlationId}`)
-    return fn(tx as Database)
+    // Drizzle types PgTransaction separately from PostgresJsDatabase. At runtime
+    // they expose the same query API we use here; the missing `$client` is not
+    // reached during transaction callbacks.
+    return fn(tx as unknown as Database)
   })
 }
 

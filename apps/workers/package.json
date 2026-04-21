@@ -1,0 +1,25 @@
+{
+  "name": "@bluecairn/workers",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "echo 'workers skeleton — not implemented'",
+    "build": "echo 'workers skeleton — no build'",
+    "start": "echo 'workers skeleton — no start'",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "echo 'stub package — no tests'",
+    "clean": "rm -rf dist .turbo"
+  },
+  "dependencies": {
+    "@bluecairn/core": "workspace:*",
+    "@bluecairn/db": "workspace:*",
+    "@bluecairn/agents": "workspace:*",
+    "@bluecairn/memory": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.7.2"
+  }
+}

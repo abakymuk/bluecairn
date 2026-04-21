@@ -41,10 +41,7 @@ export const agentRuns = pgTable(
   (table) => [
     index('idx_agent_runs_tenant_time').on(table.tenantId, sql`${table.startedAt} desc`),
     index('idx_agent_runs_thread').on(table.threadId, sql`${table.startedAt} desc`),
-    index('idx_agent_runs_agent_time').on(
-      table.agentDefinitionId,
-      sql`${table.startedAt} desc`,
-    ),
+    index('idx_agent_runs_agent_time').on(table.agentDefinitionId, sql`${table.startedAt} desc`),
     index('idx_agent_runs_status')
       .on(table.status)
       .where(sql`${table.status} in ('running', 'escalated')`),

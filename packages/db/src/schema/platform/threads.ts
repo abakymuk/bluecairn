@@ -28,7 +28,9 @@ export const threads = pgTable(
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
   },
   (table) => [
-    index('idx_threads_tenant').on(table.tenantId).where(sql`${table.deletedAt} is null`),
+    index('idx_threads_tenant')
+      .on(table.tenantId)
+      .where(sql`${table.deletedAt} is null`),
     index('idx_threads_last_message').on(
       table.tenantId,
       sql`${table.lastMessageAt} desc nulls last`,

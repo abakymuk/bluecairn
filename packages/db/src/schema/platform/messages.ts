@@ -26,7 +26,9 @@ export const messages = pgTable(
     authorUserId: uuid('author_user_id').references(() => users.id),
     authorAgentId: uuid('author_agent_id').references(() => agentDefinitions.id),
     content: text('content').notNull(),
-    attachments: jsonb('attachments').notNull().default(sql`'[]'::jsonb`),
+    attachments: jsonb('attachments')
+      .notNull()
+      .default(sql`'[]'::jsonb`),
     idempotencyKey: text('idempotency_key'),
     externalMessageId: text('external_message_id'), // Telegram message_id, etc.
     agentRunId: uuid('agent_run_id').references(() => agentRuns.id),
