@@ -8,12 +8,16 @@ import { z } from 'zod'
  */
 
 const envSchema = z.object({
-  NODE_ENV: z.enum(['development', 'staging', 'production']).default('development'),
+  NODE_ENV: z.enum(['development', 'staging', 'production', 'test']).default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
 
-  // Database
+  // Database — DATABASE_URL uses bluecairn_app (RLS-subject) for tenant-scoped
+  // request handlers. DATABASE_URL_ADMIN uses bluecairn_admin (table owner,
+  // bypasses RLS) for pre-tenant-context operations like webhook channel
+  // resolution.
   DATABASE_URL: z.string().url(),
+  DATABASE_URL_ADMIN: z.string().url(),
 
   // Telegram (ADR-0009)
   TELEGRAM_BOT_TOKEN: z.string().min(1),

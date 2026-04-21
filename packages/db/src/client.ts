@@ -24,8 +24,12 @@ export const withTenant = async <T>(
   fn: (tx: Database) => Promise<T>,
 ): Promise<T> => {
   return db.transaction(async (tx) => {
-    await tx.execute(sql`set local app.current_tenant = ${ctx.tenantId}`)
-    await tx.execute(sql`set local app.correlation_id = ${ctx.correlationId}`)
+    // `SET LOCAL` cannot bind parameters, so use the functional form
+    // set_config(name, value, is_local=true) which accepts them.
+    await tx.execute(sql`select set_config('app.current_tenant', ${ctx.tenantId}, true)`)
+    await tx.execute(
+      sql`select set_config('app.correlation_id', ${ctx.correlationId}, true)`,
+    )
     // Drizzle types PgTransaction separately from PostgresJsDatabase. At runtime
     // they expose the same query API we use here; the missing `$client` is not
     // reached during transaction callbacks.
