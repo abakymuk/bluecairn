@@ -5,7 +5,11 @@ Operational scripts for the Postgres (Neon) backend. Not part of the published `
 | Script | Purpose | Linear |
 |---|---|---|
 | `provision-roles.sql` | Create `bluecairn_app` + `bluecairn_admin` roles on a Neon branch | BLU-3 |
+| `grant-app-privileges.sql` | Grant `bluecairn_app` DML + set default privileges for future tables | BLU-12 |
+| `seed-agent-definitions.sql` | Seed the 8 agents into `agent_definitions` | BLU-10 |
 | `bootstrap-internal-tenant.ts` | Seed the `bluecairn-internal` tenant for dogfooding | BLU-14 |
+| `setup-ci-db.sh` | One-shot full bootstrap for CI / clean-room Docker Postgres | BLU-15 |
+| `migrate-staging-initial.sh` | One-time initial migration of the staging Neon branch | BLU-17 |
 
 ---
 
@@ -122,3 +126,92 @@ Handled in later issues:
 - Initial Drizzle schema push — `bun run db:generate && bun run db:push`.
 - Table/sequence `GRANT`s to `bluecairn_app` — applied by the schema migration issue (it knows which tables exist).
 - Internal tenant seed — `bootstrap-internal-tenant.ts` (BLU-14).
+
+---
+
+## BLU-17 — Staging deploy (Railway)
+
+### 1. Migrate the staging Neon branch (one-time)
+
+As `neondb_owner` in Neon Console SQL Editor on the **staging** branch:
+
+```sql
+GRANT CREATE ON SCHEMA public TO bluecairn_admin;
+```
+
+Populate Doppler `stg` config with values from 1Password (BLU-3 saved them as `DATABASE_URL_STAGING` and `DATABASE_URL_ADMIN_STAGING`):
+
+- `DATABASE_URL` ← `DATABASE_URL_STAGING`
+- `DATABASE_URL_ADMIN` ← `DATABASE_URL_ADMIN_STAGING`
+
+Then from the repo root:
+
+```bash
+doppler run --project bluecairn --config stg -- bash packages/db/scripts/migrate-staging-initial.sh
+```
+
+Expected output: 6 steps end with `✓ Staging migration complete.` Tables visible in Neon Console → staging → Tables.
+
+### 2. Populate the rest of Doppler stg
+
+Reuse the dev values for now (same internal bot, same Langfuse project):
+
+- `TELEGRAM_BOT_TOKEN` — copy from Doppler dev
+- `TELEGRAM_WEBHOOK_SECRET` — copy from Doppler dev
+- `LANGFUSE_HOST`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` — copy from Doppler dev
+- `NODE_ENV=staging`
+- `LOG_LEVEL=info`
+
+When we have a dedicated production bot + separate Langfuse project (later ticket), stg will diverge.
+
+### 3. Railway project
+
+1. [railway.com](https://railway.com) → New Project → Deploy from GitHub repo → pick `abakymuk/bluecairn` → grant Railway access.
+2. Service name: `api-staging`. Root directory: `/`. Railway auto-detects `railway.json` at the repo root.
+3. Deploy → Settings → **Wait for CI** (toggle on) so deploys only happen after GitHub Actions `verify` passes.
+4. Service → Variables → **Connect Doppler**:
+   - Authorize Railway to read Doppler
+   - Select project `bluecairn`, config `stg`
+   - Secrets flow in automatically; updates sync live.
+
+First deploy kicks off on merge to `main`. Railway assigns a URL like `https://api-staging-<slug>.up.railway.app`.
+
+### 4. Verify deploy
+
+```bash
+curl -s https://<your-railway-url>/health | jq
+# expect: {"status":"ok","service":"api","env":"staging","timestamp":"..."}
+```
+
+### 5. Set the Telegram webhook
+
+```bash
+doppler run --project bluecairn --config stg -- sh -c \
+  'curl -sX POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
+     -d "url=https://<your-railway-url>/webhooks/telegram" \
+     -d "secret_token=$TELEGRAM_WEBHOOK_SECRET" | jq'
+# expect: {"ok":true,"result":true,"description":"Webhook was set"}
+```
+
+Confirm:
+
+```bash
+doppler run --project bluecairn --config stg -- sh -c \
+  'curl -s "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getWebhookInfo" | jq'
+```
+
+### 6. Live test — first inbound message (closes BLU-13 AC #6)
+
+1. Open `@bluecairn_internal_bot` in Telegram, send any message (e.g. `/start` followed by `hello from staging`).
+2. Within ~10s, row appears in `messages` on staging:
+
+```bash
+doppler run --project bluecairn --config stg -- sh -c \
+  'psql "$DATABASE_URL_ADMIN" -c "SELECT id, content, created_at FROM messages ORDER BY created_at DESC LIMIT 3"'
+```
+
+### Redeploys
+
+Push to `main` → CI runs → on green, Railway deploys. No other steps unless schema changes.
+
+**When schema changes**: update migration files, apply to dev/stg/main Neon branches manually **before** merging to `main`. Deploy workflow assumes schema is already in sync.
