@@ -17,10 +17,10 @@
     "eval": "turbo run eval",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "db:generate": "bun run --cwd packages/db drizzle-kit generate",
-    "db:push": "bun run --cwd packages/db drizzle-kit push",
-    "db:studio": "bun run --cwd packages/db drizzle-kit studio",
-    "db:bootstrap": "bun run --cwd packages/db scripts/bootstrap-internal-tenant.ts",
+    "db:generate": "cd packages/db && bun --bun drizzle-kit generate",
+    "db:push": "cd packages/db && bun --bun drizzle-kit push",
+    "db:studio": "cd packages/db && bun --bun drizzle-kit studio",
+    "db:bootstrap": "cd packages/db && bun run scripts/bootstrap-internal-tenant.ts",
     "clean": "turbo run clean && rm -rf node_modules"
   },
   "devDependencies": {
