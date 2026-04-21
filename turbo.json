@@ -4,7 +4,10 @@
   "globalDependencies": ["tsconfig.base.json", ".env.local"],
   "globalEnv": [
     "NODE_ENV",
+    "LOG_LEVEL",
+    "PORT",
     "DATABASE_URL",
+    "DATABASE_URL_ADMIN",
     "REDIS_URL",
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_WEBHOOK_SECRET",

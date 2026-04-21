@@ -43,9 +43,9 @@ const emit = (level: Level, message: string, fields: LogFields = {}): void => {
   }
   // In dev, pretty-print for readability. In staging/prod, single-line JSON.
   if (env.NODE_ENV === 'development') {
-    console.log(`[${entry.timestamp}] ${level.toUpperCase()} ${message}`, fields)
+    console.info(`[${entry.timestamp}] ${level.toUpperCase()} ${message}`, fields)
   } else {
-    console.log(JSON.stringify(entry))
+    console.info(JSON.stringify(entry))
   }
 }
 
