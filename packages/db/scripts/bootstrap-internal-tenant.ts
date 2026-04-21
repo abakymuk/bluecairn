@@ -10,7 +10,7 @@
  * Matches Linear issue BLU-14.
  */
 
-import { eq, sql } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import postgres from 'postgres'
 import * as schema from '../src/schema/index.js'
@@ -27,8 +27,11 @@ const db = drizzle(client, { schema })
 async function bootstrap() {
   console.log('→ Bootstrapping bluecairn-internal tenant...')
 
-  // Disable RLS for this session (admin only)
-  await db.execute(sql`set local row_security = off`)
+  // Note: we don't need `set row_security = off` here. Running as
+  // bluecairn_admin (table owner) already bypasses RLS by default, and the
+  // old `set local row_security = off` emitted `WARNING 25P01: SET LOCAL
+  // can only be used in transaction blocks` because this function runs
+  // outside an explicit transaction.
 
   // 1. Tenant
   const tenantSlug = 'bluecairn-internal'
