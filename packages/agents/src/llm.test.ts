@@ -90,6 +90,53 @@ describe('generateText wrapper', () => {
     })
   })
 
+  test('eval + case_id metadata propagates when set (ADR-0011)', async () => {
+    mockAiGenerate.mockResolvedValueOnce({
+      text: 'x',
+      usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+    })
+
+    await generateText({
+      model: fakeModel as unknown as Parameters<typeof generateText>[0]['model'],
+      prompt: 'p',
+      metadata: {
+        tenantId: 't',
+        correlationId: 'c',
+        eval: 'concierge/unit',
+        caseId: 'ack-vendor-complaint',
+      },
+    })
+
+    const [args] = mockAiGenerate.mock.calls[0] ?? []
+    expect(args).toMatchObject({
+      experimental_telemetry: {
+        metadata: {
+          eval: 'concierge/unit',
+          case_id: 'ack-vendor-complaint',
+        },
+      },
+    })
+  })
+
+  test('eval + case_id absent when metadata omits them', async () => {
+    mockAiGenerate.mockResolvedValueOnce({
+      text: 'x',
+      usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+    })
+
+    await generateText({
+      model: fakeModel as unknown as Parameters<typeof generateText>[0]['model'],
+      prompt: 'p',
+      metadata: { tenantId: 't', correlationId: 'c' },
+    })
+
+    const [args] = mockAiGenerate.mock.calls[0] ?? []
+    const metadata = (args as { experimental_telemetry: { metadata: Record<string, unknown> } })
+      .experimental_telemetry.metadata
+    expect(metadata).not.toHaveProperty('eval')
+    expect(metadata).not.toHaveProperty('case_id')
+  })
+
   test('rate limit error classified as rate_limit', async () => {
     mockAiGenerate.mockRejectedValueOnce(new Error('429 Too Many Requests — rate limit exceeded'))
 

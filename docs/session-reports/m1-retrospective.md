@@ -46,7 +46,7 @@ What *didn't* compress the timeline: scope-cutting. Every BLU-NN in the original
 ## Tech debt accepted
 
 1. **BLU-34 — orchestrator + agent failure-path hardening.** BLU-22 classifier LLM failure throws without `audit_log`; BLU-23 concierge LLM failure leaves `agent_runs` in `running` state forever; BLU-22 policy-step returns hardcoded default instead of reading `policies` table. Acceptable for M1 (no real production traffic, Inngest retries mask most issues), **not acceptable for M2** — Sofia will hit LLM failures orders of magnitude more often and the audit log is the source of truth for ops-web's Activity view.
-2. **BLU-35 — eval harness not yet wired.** `packages/agents/src/concierge/evals/unit.jsonl` exists as the authoring artifact; no Braintrust/Promptfoo runner executes it. `bun run eval concierge` doesn't work. **Not acceptable for M2** — Sofia's M2 exit gate ("100% of discrepancies caught") cannot be measured without a runner.
+2. **BLU-35 — eval harness not yet wired.** `packages/agents/src/concierge/evals/unit.jsonl` exists as the authoring artifact; no runner executes it. `bun run eval concierge` doesn't work. **Not acceptable for M2** — Sofia's M2 exit gate ("100% of discrepancies caught") cannot be measured without a runner. *Update 2026-04-22 (post-retro): resolved in the same session via ADR-0011 — in-repo minimal TypeScript runner at `packages/evals/`, not Braintrust/Promptfoo.*
 3. **Per-step OTel trace topology in Langfuse** (ADR-0010 consequence). Inngest's `step.run` checkpointing emits one OTel trace per checkpointed step, so a single message→response flow surfaces as ~13 sibling `inngest.execution` traces in Langfuse instead of one unified tree. In-step nesting (`llm.*` and `tool.*` spans) renders correctly. **Polish deferred to M2+**; tracked in ADR-0010 consequences.
 4. **`comms.send_email` was dropped from M1 scope.** ROADMAP Month 1 originally listed both `send_message` and `send_email`; only `send_message` shipped. Dana (M3) needs `send_email`. Tracked as part of the outbound-channel expansion tracking issue (see "Carry-forward").
 5. **M0 + M1 Linear project status still `Backlog`** despite 100% milestone progress. Mechanical cleanup; Step 6 of the current milestone-0 plan flips them to Completed.
@@ -59,7 +59,7 @@ Items 1, 2, 5 are closed within milestone-0 (`M1 debt + Sofia prereqs`). Items 3
 
 Decisions that Sofia build will force, better ratified now than rediscovered mid-sprint:
 
-1. **Eval harness choice — Braintrust + Promptfoo vs minimal custom runner.** BLU-35 leaves this open. Both have M2+ consequences (CI gating, eval volume pricing, Langfuse integration depth). ADR ratifies the choice and the escape hatch. **Load-bearing: Sofia's exit gate cannot be measured without an eval harness.**
+1. ~~**Eval harness choice — Braintrust + Promptfoo vs minimal custom runner.**~~ *Resolved by [ADR-0011](../adr/0011-minimal-in-repo-eval-runner.md) on 2026-04-22 during BLU-35 — in-repo TypeScript runner in `packages/evals/`, advisory CI, revisit triggers documented.*
 2. **Documents MCP transport — vendor-specific OCR vs Anthropic PDF + vision.** Sofia's `parse_invoice` and `extract_receipt` need a reliable document-understanding path. Anthropic's PDF + vision is model-abstraction consistent (ADR-0005) but more expensive per parse than vendor OCR; vendor OCR drags another SDK into `packages/integrations/`. **Load-bearing: rebuilding this after Sofia ships is a multi-week cost.**
 3. **Memory retrieval policy — recency vs semantic vs hybrid, eviction threshold.** `packages/memory/` is a stub. Sofia + future agents will write `memory_entries` aggressively; without a retrieval policy, memory queries either return everything (expensive) or miss relevant context (failure mode). **Load-bearing: changing retrieval semantics post-hoc rewrites every memory-dependent prompt.**
 
@@ -99,7 +99,7 @@ Optional but worth considering:
 ## Next actions (not in this retro — see M2 milestone-0)
 
 - BLU-34 ship — orchestrator + agent failure paths hardened
-- BLU-35 ship — Braintrust/Promptfoo eval harness wired
+- BLU-35 ship — in-repo eval runner wired (ADR-0011)
 - BLU-38 ship — docs actualized (in flight, same PR as this retro)
 - BLU-39 close — this retro written (self-referential; closes on PR merge)
 - M2 milestones 1-6 stubbed in Linear (shape only; issues wait on Track A)

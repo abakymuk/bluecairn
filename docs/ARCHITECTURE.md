@@ -348,7 +348,7 @@ Every LLM call, MCP tool call, and agent run is traced. Latency, token counts, c
 
 Self-hosted on our infrastructure for data sovereignty. We will not send customer conversation data to a third-party tracing SaaS.
 
-### Evals: Braintrust + Promptfoo
+### Evals: in-repo runner (ADR-0011)
 
 No prompt ships without passing its eval suite. Each agent has:
 - **Unit evals:** specific input → expected output behaviors.
@@ -356,7 +356,7 @@ No prompt ships without passing its eval suite. Each agent has:
 - **Rubric evals:** LLM-as-judge scoring against a written rubric.
 - **Adversarial evals:** prompt injection, jailbreak, policy violation cases.
 
-Evals are run in CI. A prompt change with a failing eval does not deploy.
+Evals are executed by the in-repo runner at `packages/evals/` via `bun run eval <agent>`. Per ADR-0011 we do not use Braintrust or Promptfoo for M2/M3 — a minimal TypeScript runner reuses the production `generateText` wrapper and tags traces with `metadata.eval` + `metadata.case_id` for Langfuse filtering. CI runs evals on agent-touching PRs but **the workflow is advisory**; it surfaces pass/fail without blocking merge. Promoting to a blocking gate is itself an ADR (ADR-0011 § Revisit conditions).
 
 ### Authentication and authorization
 
@@ -412,8 +412,7 @@ Every choice is documented here with one-line justification. Full ADRs for the b
 - **Better Stack / Grafana Cloud.** Infrastructure monitoring, logs, alerts.
 
 ### Evals
-- **Braintrust** for production eval and dataset management.
-- **Promptfoo** for local/CI eval runs and prompt iteration.
+- **In-repo TypeScript runner** in `packages/evals/` for M2/M3 — see ADR-0011. Revisit triggers: eval volume ≥ 1k cases/run for two weeks, team > 2 engineers, cross-tenant eval comparison, or a red-eval-merged-to-staging incident.
 
 ### Communications
 - **Twilio Conversations.** Unified API for WhatsApp, SMS, Telegram.

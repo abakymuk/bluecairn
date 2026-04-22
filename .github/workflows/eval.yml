@@ -1,0 +1,102 @@
+name: Eval (advisory)
+
+# Advisory-only agent eval run (ADR-0011). NEVER a merge gate at M2/M3.
+#
+# Runs the in-repo eval runner (packages/evals) against the concierge agent
+# whenever a PR touches agent code, the runner, or the prompt. Uploads the
+# Markdown report as a workflow artifact and posts a summary comment on the
+# PR. The job itself ALWAYS exits 0 at the workflow level — the pass/fail
+# signal is surfaced via the summary comment + artifact + run status title.
+#
+# Promoting this to a blocking merge gate requires a fresh ADR (see ADR-0011
+# § Revisit conditions) *and* an explicit flip in this file.
+
+on:
+  pull_request:
+    paths:
+      - 'packages/agents/**'
+      - 'packages/evals/**'
+      - '.github/workflows/eval.yml'
+  workflow_dispatch:
+    inputs:
+      agent:
+        description: 'Agent code to eval (default: concierge)'
+        required: false
+        default: 'concierge'
+
+concurrency:
+  group: eval-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  eval:
+    name: advisory eval
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      # Required by the runner. `secrets.*` resolves to empty string when
+      # a secret is unset — the runner short-circuits with an exit-2 usage
+      # error in that case, which we then interpret as "eval skipped, not
+      # failed" below.
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+      LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+      LANGFUSE_HOST: ${{ secrets.LANGFUSE_HOST }}
+      NODE_ENV: eval
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.2'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run eval (advisory — never blocks)
+        id: eval
+        continue-on-error: true
+        run: |
+          set +e
+          AGENT="${{ github.event.inputs.agent || 'concierge' }}"
+          if [ -z "${ANTHROPIC_API_KEY}" ] || [ -z "${LANGFUSE_PUBLIC_KEY}" ]; then
+            echo "SKIP=true" >> "$GITHUB_OUTPUT"
+            echo "skip_reason=required secrets missing" >> "$GITHUB_OUTPUT"
+            echo "⚠ Skipping eval — required secrets missing (ANTHROPIC_API_KEY and/or LANGFUSE_*). This is expected on forked-PR runs; the workflow stays advisory."
+            exit 0
+          fi
+          bun run --cwd packages/evals eval "${AGENT}" | tee eval-output.log
+          echo "EXIT_CODE=$?" >> "$GITHUB_OUTPUT"
+          set -e
+
+      - name: Upload Markdown report
+        if: steps.eval.outputs.SKIP != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: packages/evals/reports/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Summarize result (always exits 0)
+        if: always()
+        run: |
+          echo "## Eval (advisory, ADR-0011)" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.eval.outputs.SKIP }}" = "true" ]; then
+            echo "_Skipped — ${{ steps.eval.outputs.skip_reason }}._" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          EXIT="${{ steps.eval.outputs.EXIT_CODE }}"
+          if [ "${EXIT}" = "0" ]; then
+            echo "✅ All cases passed." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "❌ One or more cases failed. See the \`eval-report\` artifact." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Workflow is advisory per ADR-0011 — pass/fail does not block merge." >> "$GITHUB_STEP_SUMMARY"
+          # Always exit 0 — the advisory bar is the whole point.
+          exit 0

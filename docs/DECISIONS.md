@@ -98,6 +98,7 @@ Do not write an ADR for:
 | [0008](adr/0008-managed-service-not-saas.md) | Managed service, not SaaS | Accepted | 2026-04-20 |
 | [0009](adr/0009-telegram-first-for-mvp.md) | Telegram-first for MVP | Accepted | 2026-04-22 |
 | [0010](adr/0010-langfuse-cloud-for-m0-m1.md) | Langfuse Cloud for M0/M1 | Accepted | 2026-04-22 |
+| [0011](adr/0011-minimal-in-repo-eval-runner.md) | Minimal in-repo eval runner for M2/M3 | Accepted | 2026-04-22 |
 
 ---
 
