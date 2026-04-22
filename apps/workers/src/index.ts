@@ -76,6 +76,33 @@ app.notFound((c) => c.json({ ok: false, error: 'not found' }, 404))
 
 logger.info('workers starting', { port: env.PORT, env: env.NODE_ENV })
 
+// Self-sync Inngest on boot in staging/prod. Replaces the CI-driven sync step
+// (BLU-36 loop) which deadlocked with Railway's "Wait for CI" gate: any
+// check_run on the merge commit — including the one created by a
+// workflow_run-triggered sync — blocks Railway's deploy until the suite goes
+// fully green. That check couldn't succeed until Railway deployed, which
+// Railway wouldn't do until the check succeeded. Circular.
+//
+// Doing the sync from inside the container removes CI from the critical path.
+// Idempotent: Inngest's PUT handler is safe to re-invoke. If the call fails
+// transiently, Inngest Cloud will still discover functions lazily via its own
+// next-event-triggered sync.
+if (
+  env.INNGEST_SIGNING_KEY !== undefined &&
+  env.NODE_ENV !== 'development' &&
+  env.NODE_ENV !== 'test'
+) {
+  setTimeout(() => {
+    void fetch(`http://localhost:${env.PORT}/api/inngest`, { method: 'PUT' })
+      .then((r) => logger.info('inngest self-sync', { status: r.status }))
+      .catch((e: unknown) =>
+        logger.warn('inngest self-sync failed', {
+          err: e instanceof Error ? e.message : String(e),
+        }),
+      )
+  }, 3000)
+}
+
 export default {
   port: env.PORT,
   fetch: app.fetch,

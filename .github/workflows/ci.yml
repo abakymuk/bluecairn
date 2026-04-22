@@ -158,10 +158,10 @@ jobs:
           railway variable set "DEPLOY_COMMIT_SHA=${GITHUB_SHA}" \
             --service @workers-staging --environment staging
 
-  # sync-inngest-staging lives in .github/workflows/sync-inngest.yml (triggered
-  # by `workflow_run` after this workflow completes). It was moved out of ci.yml
-  # to break a Railway check-suite deadlock: Railway's "Wait for CI to pass"
-  # setting blocks the deploy until the entire commit check-suite goes green,
-  # but sync-inngest-staging depends on Railway having completed the deploy.
-  # Keeping it here made every main-merge deploy get SKIPPED with
-  # `skippedReason: "CI check suite failed"`. See git history / BLU-36 loop.
+  # Inngest sync runs in-process on workers container boot
+  # (apps/workers/src/index.ts). The previous CI-driven sync deadlocked with
+  # Railway's "Wait for CI" gate — any check_run on the merge commit (including
+  # from a workflow_run-triggered workflow) blocked the Railway deploy until
+  # the suite went fully green, which the sync itself couldn't satisfy without
+  # a deploy. Evidence: 10 consecutive SKIPPED deployments with
+  # `skippedReason: "CI check suite failed"`.
