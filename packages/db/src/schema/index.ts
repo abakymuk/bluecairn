@@ -41,3 +41,9 @@ export * from './agents/integrations.js'
 // Cross-cutting
 export * from './audit-log.js'
 export * from './memory-entries.js'
+
+// Auth (Better Auth, BLU-26) — platform-global, RLS NOT applied.
+// Ops-pod operators are cross-tenant by design; tenant-scoped access is
+// enforced in ops-web page code against `tenant_users`, not via RLS on
+// auth rows. See packages/db/migrations-manual/0005_auth_tables.sql.
+export * from './auth/index.js'

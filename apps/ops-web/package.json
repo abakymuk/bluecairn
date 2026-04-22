@@ -4,20 +4,39 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "echo 'ops-web skeleton — not implemented'",
-    "build": "echo 'ops-web skeleton — no build'",
-    "start": "echo 'ops-web skeleton — no start'",
+    "dev": "next dev --port 3002",
+    "build": "next build",
+    "start": "next start --port 3002",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
-    "test": "echo 'stub package — no tests'",
-    "clean": "rm -rf dist .turbo"
+    "test": "echo 'no tests yet — BLU-27 thread viewer will add'",
+    "clean": "rm -rf .next .turbo dist"
   },
   "dependencies": {
     "@bluecairn/core": "workspace:*",
-    "@bluecairn/db": "workspace:*"
+    "@bluecairn/db": "workspace:*",
+    "better-auth": "^1.3.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "drizzle-orm": "^0.38.3",
+    "lucide-react": "^0.400.0",
+    "next": "^15.0.0",
+    "postgres": "^3.4.5",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwind-merge": "^2.6.0",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@types/bun": "^1.2.0",
+    "@tailwindcss/postcss": "^4.0.0",
+    "@types/node": "^22",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "eslint": "^9",
+    "eslint-config-next": "^15.0.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^4.0.0",
+    "tw-animate-css": "^1.2.0",
     "typescript": "^5.7.2"
   }
 }

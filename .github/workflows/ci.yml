@@ -47,6 +47,17 @@ jobs:
       NODE_ENV: test
       LOG_LEVEL: warn
 
+      # --- ops-web (BLU-26) stubs — `next build` runs during CI and
+      # imports `src/env.ts` at compile time; Zod validates at-least-32-char
+      # BETTER_AUTH_SECRET + URL shape for BETTER_AUTH_URL, so stubs must
+      # satisfy those rules. OAuth creds are placeholders — no real flow
+      # is exercised in CI.
+      BETTER_AUTH_SECRET: ci-stub-better-auth-secret-at-least-thirty-two-characters-long-please
+      BETTER_AUTH_URL: http://localhost:3002
+      GOOGLE_CLIENT_ID: ci-stub-google-client-id
+      GOOGLE_CLIENT_SECRET: ci-stub-google-client-secret
+      OPS_WEB_ALLOWED_EMAILS: ci-stub@example.com
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
