@@ -49,6 +49,13 @@ doppler run --config dev -- bun run --cwd apps/ops-web dev
 # → http://localhost:3002
 ```
 
+## Ports
+
+- `dev` script → `next dev --port 3002` (fixed for local predictability).
+- `start` script → `next start` (reads `$PORT` env; Railway injects
+  it to match the service's `targetPort`). Locally, if you need a
+  fixed port for production-mode testing: `PORT=3002 bun run start`.
+
 ## Google OAuth setup (one-time)
 
 1. Google Cloud Console → **APIs & Services → Credentials** → _Create
