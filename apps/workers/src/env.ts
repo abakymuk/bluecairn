@@ -16,8 +16,23 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3001),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
 
+  // Admin-role DB URL — workers operate in system context; RLS boundaries
+  // enforced via `withTenant()` wrappers on writes.
+  DATABASE_URL_ADMIN: z.string().url(),
+
   INNGEST_EVENT_KEY: z.string().min(1).optional(),
   INNGEST_SIGNING_KEY: z.string().startsWith('signkey-').optional(),
+
+  // Langfuse (optional in dev without Doppler; required in staging+prod).
+  LANGFUSE_HOST: z.string().url().optional(),
+  LANGFUSE_PUBLIC_KEY: z.string().optional(),
+  LANGFUSE_SECRET_KEY: z.string().optional(),
+
+  // LLM providers. `.catch(undefined)` handles the Claude-Code parent-shell
+  // leak where `ANTHROPIC_API_KEY` doesn't start with `sk-ant-` — same
+  // pattern as apps/api/src/env.ts. Actual calls fail loud at call time
+  // if the key is required and missing.
+  ANTHROPIC_API_KEY: z.string().startsWith('sk-ant-').optional().catch(undefined),
 })
 
 const parsed = envSchema.safeParse(process.env)

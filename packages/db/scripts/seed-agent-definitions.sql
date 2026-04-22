@@ -10,14 +10,17 @@
 -- Matches Linear issue BLU-10.
 
 INSERT INTO agent_definitions (code, persona_name, display_scope, priority) VALUES
-  ('vendor_ops', 'Sofia', 'Vendor Ops',   'P0'),
-  ('inventory',  'Marco', 'Inventory',    'P0'),
-  ('finance',    'Dana',  'Finance',      'P0'),
-  ('review',     'Iris',  'Review',       'P0'),
-  ('scheduling', 'Leo',   'Scheduling',   'P1'),
-  ('phone',      'Nova',  'Phone',        'P1'),
-  ('marketing',  'Rio',   'Marketing',    'P2'),
-  ('compliance', 'Atlas', 'Compliance',   'P2')
+  ('vendor_ops', 'Sofia',     'Vendor Ops',   'P0'),
+  ('inventory',  'Marco',     'Inventory',    'P0'),
+  ('finance',    'Dana',      'Finance',      'P0'),
+  ('review',     'Iris',      'Review',       'P0'),
+  ('scheduling', 'Leo',       'Scheduling',   'P1'),
+  ('phone',      'Nova',      'Phone',        'P1'),
+  ('marketing',  'Rio',       'Marketing',    'P2'),
+  ('compliance', 'Atlas',     'Compliance',   'P2'),
+  -- BLU-22: Concierge is the M1 catchall agent. Orchestrator routes every
+  -- unclassified message here. Real prompt + behavior lands in BLU-23.
+  ('concierge',  'Concierge', 'Catchall',     'P0')
 ON CONFLICT (code) DO NOTHING;
 
 SELECT code, persona_name, display_scope, priority

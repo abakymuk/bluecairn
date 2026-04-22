@@ -134,9 +134,11 @@ describe('Telegram webhook', () => {
 
     // BLU-19: exactly one thread.message.received event emitted, carrying
     // the canonical payload the orchestrator expects.
+    // BLU-22: event now has explicit `id` for Inngest-side dedup.
     expect(mockInngestSend).toHaveBeenCalledTimes(1)
     expect(mockInngestSend).toHaveBeenCalledWith({
       name: 'thread.message.received',
+      id: `event:tg:${TEST_CHAT_ID}:${messageId}`,
       data: expect.objectContaining({
         tenant_id: tenantId,
         thread_id: threads[0]?.id,
