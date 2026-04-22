@@ -367,6 +367,25 @@ async function handleCallbackQuery(
       approvalRequestId: parsed.approvalRequestId,
       decision: parsed.decision,
     })
+    // BLU-28: write an audit_log row for every successful callback emission
+    // so ops-web forensics match the failure audits (callback.malformed,
+    // callback.unknown_chat). Without this, a cross-tenant smuggling
+    // attempt that passes shape validation leaves no trace at the
+    // webhook layer — the only record would be the emitted Inngest
+    // event, which is not queryable from ops-web.
+    await writeCallbackAudit({
+      tenantId: channel.tenantId,
+      eventKind: 'callback.emitted',
+      eventSummary: `approval decision forwarded: ${parsed.decision} ${parsed.approvalRequestId}`,
+      payload: {
+        callback_query_id: callback.callbackQueryId,
+        chat_id: callback.chatId,
+        approval_request_id: parsed.approvalRequestId,
+        decision: parsed.decision,
+        user_telegram_id: callback.fromTelegramUserId,
+        correlation_id: correlationId,
+      },
+    })
   } catch (err) {
     // Log only — the user already sees the button dismissed; re-delivery by
     // Telegram or manual replay from Inngest dashboard is the recovery path.
@@ -388,7 +407,7 @@ async function handleCallbackQuery(
  */
 async function writeCallbackAudit(args: {
   tenantId: string | null
-  eventKind: 'callback.malformed' | 'callback.unknown_chat'
+  eventKind: 'callback.malformed' | 'callback.unknown_chat' | 'callback.emitted'
   eventSummary: string
   payload: Record<string, unknown>
 }): Promise<void> {

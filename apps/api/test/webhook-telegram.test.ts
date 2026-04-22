@@ -274,7 +274,7 @@ describe('Telegram webhook', () => {
   // BLU-24: callback_query webhook branch
   // ---------------------------------------------------------------------------
 
-  test('valid approval callback → answerCallbackQuery + emit approval.decision.recorded, no audit', async () => {
+  test('valid approval callback → answerCallbackQuery + emit approval.decision.recorded + callback.emitted audit (BLU-28)', async () => {
     const approvalRequestId = '11111111-2222-3333-4444-555555555555'
     const callbackQueryId = `cb-${crypto.randomUUID().slice(0, 8)}`
     const update = mockCallbackUpdate({
@@ -302,11 +302,25 @@ describe('Telegram webhook', () => {
       }),
     })
 
-    const audits = await admin<{ id: string }[]>`
-      SELECT id FROM audit_log
-      WHERE event_payload->>'callback_query_id' = ${callbackQueryId}
+    // BLU-28: successful callback now also writes a callback.emitted audit
+    // row under the channel's tenant. Closes the observability asymmetry
+    // where only failures (malformed, unknown_chat) were audited.
+    const audits = await admin<
+      { id: string; tenant_id: string | null; event_kind: string; event_payload: unknown }[]
+    >`
+      SELECT id, tenant_id, event_kind, event_payload
+      FROM   audit_log
+      WHERE  event_payload->>'callback_query_id' = ${callbackQueryId}
     `
-    expect(audits).toHaveLength(0)
+    expect(audits).toHaveLength(1)
+    expect(audits[0]?.tenant_id).toBe(tenantId)
+    expect(audits[0]?.event_kind).toBe('callback.emitted')
+    expect(audits[0]?.event_payload).toMatchObject({
+      callback_query_id: callbackQueryId,
+      approval_request_id: approvalRequestId,
+      decision: 'approved',
+      user_telegram_id: 99_999,
+    })
   })
 
   test('malformed callback data → audit (tenant-scoped), no emit, spinner still dismissed', async () => {
