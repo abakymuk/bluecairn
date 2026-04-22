@@ -141,6 +141,12 @@ function AgentRunItem({
       <p className="text-xs">
         <span className="font-medium">latency:</span> {formatLatencyMs(item.latencyMs)}
       </p>
+      {item.completedAt && (
+        <p className="text-xs">
+          <span className="font-medium">completed:</span>{' '}
+          {formatRelativeTime(item.completedAt, now)}
+        </p>
+      )}
     </Row>
   )
 }
