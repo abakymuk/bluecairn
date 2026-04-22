@@ -86,11 +86,11 @@ Everything before Month 1. Setup and fixation.
 - Monorepo created, CI/CD scaffolded, Vercel + Neon + Upstash accounts provisioned.
 - First migration: core platform tables (`tenants`, `users`, `tenant_users`, `channels`, `threads`, `messages`, `agent_definitions`, `prompts`, `agent_runs`, `tool_calls`, `actions`, `audit_log`).
 - Single internal tenant created (`bluecairn-internal`). This is us, the first customer, for infra testing.
-- Twilio account provisioned. First WhatsApp sandbox number. First inbound message makes it to the database.
+- Telegram bot registered via @BotFather (per ADR-0009). First inbound Telegram message makes it to the database with multi-tenant isolation verified end-to-end. Twilio/WhatsApp deferred to Month 11+.
 
 **Gate to Month 1:**
 - Nick has a live operational reality (even small) generating at least one signal per day into a chat thread.
-- The platform can receive a WhatsApp message and persist it, with tenant isolation verified end-to-end.
+- The platform can receive a Telegram message and persist it, with tenant isolation verified end-to-end.
 
 ---
 
@@ -104,12 +104,12 @@ Everything before Month 1. Setup and fixation.
 **Track B:**
 - Orchestrator v0.1: receive message, route to a single "catchall" agent that writes everything to a thread visible in a minimal internal web console.
 - Internal ops-web (Next.js) at `ops.bluecairn.internal` — read-only view of threads, messages, agent runs.
-- First MCP server built: **Comms MCP** (`comms.send_message`, `comms.send_email`).
+- First MCP server built: **Comms MCP** (`comms.send_message`). `send_email` deferred — tracked separately as outbound-channel expansion (see M2/M3).
 - First agent stub deployed: generic "Concierge" that responds to Nick's messages with acknowledgment and structured logging. This is not a production agent — it exists to prove the pipeline.
-- Langfuse self-hosted, instrumented on every LLM call.
+- Langfuse Cloud (Hobby tier, US region) per ADR-0010, instrumented on every LLM call. Self-host deferred to Month 12+.
 
 **Gate to Month 2:**
-- Every message Nick sends to the BlueCairn WhatsApp number appears in the ops console within 10 seconds.
+- Every message Nick sends to the BlueCairn Telegram bot appears in the ops console within 10 seconds.
 - Every agent response is logged with latency, tokens, cost.
 - Zero cross-tenant leakage in test multi-tenant scenarios (RLS verified with adversarial queries).
 

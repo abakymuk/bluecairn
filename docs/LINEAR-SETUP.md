@@ -18,11 +18,11 @@ This document records the one-time manual setup for the BlueCairn team in Linear
 - 8 agent labels (`agent/sofia`, `agent/marco`, `agent/dana`, `agent/iris`, `agent/leo`, `agent/nova`, `agent/rio`, `agent/atlas`)
 - 7 type labels (`type/feature`, `type/bug`, `type/refactor`, `type/infra`, `type/eval`, `type/docs`, `type/spike`)
 - 2 scope labels (`scope/platform`, `scope/tenant-specific`)
-- 9 ADR labels (`adr/0001-typescript` through `adr/0009-telegram-first`)
+- 10 ADR labels (`adr/0001-typescript` through `adr/0010-langfuse-cloud`)
 
 ✅ 6 projects (M0–M5) with descriptions, start/target dates, links to ADRs  
 ✅ M0 has 5 milestones covering Month 0 deliverables  
-✅ 12 M0 issues created (BLU-3 through BLU-15) spanning all milestones
+✅ 17 M0 issues created (BLU-1 through BLU-17; all Done) + 15 M1 issues (BLU-18 through BLU-30, BLU-37; all Done)
 
 ---
 
