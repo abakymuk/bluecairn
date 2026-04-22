@@ -40,9 +40,8 @@ vi.mock('@langfuse/tracing', () => ({
   getActiveSpanId: vi.fn().mockReturnValue('test-span-id'),
 }))
 
-const { handleAgentConciergeRun, handleAgentConciergeRunFailure } = await import(
-  '../../src/functions/agent-concierge-run.js'
-)
+const { handleAgentConciergeRun, handleAgentConciergeRunFailure, toTaggedStepError, parseFailedStep } =
+  await import('../../src/functions/agent-concierge-run.js')
 
 const admin = postgres(adminUrl, { max: 1, prepare: false })
 const db = createDatabase(adminUrl)
@@ -460,6 +459,70 @@ describe('handleAgentConciergeRun', () => {
       AND event_payload->>'correlation_id' = ${correlationId}
     `
     expect(audits).toHaveLength(1)
+  })
+
+  test('raw generateText throw (not Err) gets tagged with [step=generate-ack] (PR #37 P2)', async () => {
+    // When generateText throws instead of returning Err(...), the step's
+    // try/catch converts it into a [step=generate-ack]-tagged Error so
+    // onFailure attributes correctly. Without the wrapper, the raw throw
+    // would reach onFailure untagged → failed_step='unknown'.
+    mockGenerateText.mockRejectedValueOnce(new Error('Anthropic SDK panic: socket hang up'))
+
+    const ev = makeEvent()
+    const err = await handleAgentConciergeRun({
+      event: ev,
+      step: fakeStep,
+      dbOverride: db,
+    }).catch((e: unknown) => e as Error)
+
+    expect(err).toBeInstanceOf(Error)
+    expect(err.message).toMatch(/^\[step=generate-ack\] /)
+    expect(err.message).toContain('Anthropic SDK panic: socket hang up')
+
+    // Run stays running until onFailure fires (no premature terminal state).
+    const [run] = await admin<{ status: string }[]>`
+      SELECT status FROM agent_runs WHERE id = ${runId}
+    `
+    expect(run?.status).toBe('running')
+  })
+
+  test('toTaggedStepError: tags every step consistently; unit coverage for PR #37 P2', () => {
+    // Unit-level: the helper is what every step's catch delegates to, so
+    // covering all four step names + preservation semantics here is
+    // cheaper than spinning up four separate integration fixtures.
+    for (const step of [
+      'load-run-context',
+      'generate-ack',
+      'insert-action',
+      'finalize-agent-run',
+    ] as const) {
+      const tagged = toTaggedStepError(
+        step,
+        new Error('ECONNRESET: postgres client disconnected'),
+      )
+      expect(tagged.message).toMatch(new RegExp(`^\\[step=${step}\\] ECONNRESET`))
+      expect(parseFailedStep(tagged)).toBe(step)
+    }
+
+    // Already-tagged error passes through unchanged (idempotent under
+    // nested try/catch — hand-authored wrapStepError inside a step body
+    // must not get re-wrapped by the outer catch).
+    const already = new Error('[step=generate-ack] [kind=rate_limit] original')
+    expect(toTaggedStepError('finalize-agent-run', already)).toBe(already)
+
+    // Non-Error input stringifies into the tag.
+    expect(toTaggedStepError('insert-action', 'string error').message).toBe(
+      '[step=insert-action] string error',
+    )
+
+    // Preserves stack + cause for debugging.
+    const withCause = new Error('outer')
+    ;(withCause as Error & { cause?: unknown }).cause = new Error('inner')
+    const taggedWithCause = toTaggedStepError('generate-ack', withCause)
+    expect((taggedWithCause as Error & { cause?: unknown }).cause).toBe(
+      (withCause as Error & { cause?: unknown }).cause,
+    )
+    expect(taggedWithCause.stack).toBe(withCause.stack)
   })
 
   test('onFailure: unknown error (no [step=...] tag) → failed_step="unknown"', async () => {

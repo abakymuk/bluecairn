@@ -67,6 +67,31 @@ const wrapStepError = (
   return new Error(`[step=${step}] ${kindTag}${message}`)
 }
 
+/**
+ * Return `err` with the `[step=<name>]` prefix if it isn't already
+ * tagged. Hand-authored throws inside a step body use `wrapStepError`
+ * directly and pass through here unchanged.
+ *
+ * Infrastructure throws (Drizzle, `withTenant`, a `generateText`
+ * implementation that throws instead of returning `Err(...)`, etc.)
+ * are the reason this exists — without it the review's PR #37 P2 gap
+ * would let those bypass the step-identity contract and surface in
+ * onFailure as `failed_step='unknown'`. Callers use
+ * `throw toTaggedStepError(step, err)` in each step's catch block.
+ */
+export const toTaggedStepError = (step: ConciergeFailedStep, err: unknown): Error => {
+  if (err instanceof Error && err.message.startsWith('[step=')) return err
+  const originalMessage = err instanceof Error ? err.message : String(err)
+  const tagged = new Error(`[step=${step}] ${originalMessage}`)
+  if (err instanceof Error && err.stack !== undefined) {
+    tagged.stack = err.stack
+  }
+  if (err instanceof Error && err.cause !== undefined) {
+    ;(tagged as Error & { cause?: unknown }).cause = err.cause
+  }
+  return tagged
+}
+
 /** Pull the `[step=<name>]` tag from an error message; defaults to 'unknown'. */
 export const parseFailedStep = (err: unknown): ConciergeFailedStep => {
   if (!(err instanceof Error)) return 'unknown'
@@ -246,61 +271,71 @@ export const handleAgentConciergeRun = async (args: {
       const preload = await step.run(
         'load-run-context',
         async (): Promise<PreloadResult> => {
-          const ctx = newTenantContext({
-            tenantId: TenantId(tenant_id),
-            correlationId: correlation_id,
-          })
-          return await withTenant(dbToUse, ctx, async (tx) => {
-            const [run] = await tx
-              .select({
-                id: schema.agentRuns.id,
-                promptId: schema.agentRuns.promptId,
-                threadId: schema.agentRuns.threadId,
-              })
-              .from(schema.agentRuns)
-              .where(eq(schema.agentRuns.id, run_id))
-              .limit(1)
-            if (run === undefined) {
-              throw wrapStepError(
-                'load-run-context',
-                `agent_run ${run_id} not found (orchestrator + concierge out of sync)`,
-              )
-            }
+          try {
+            const ctx = newTenantContext({
+              tenantId: TenantId(tenant_id),
+              correlationId: correlation_id,
+            })
+            return await withTenant(dbToUse, ctx, async (tx) => {
+              const [run] = await tx
+                .select({
+                  id: schema.agentRuns.id,
+                  promptId: schema.agentRuns.promptId,
+                  threadId: schema.agentRuns.threadId,
+                })
+                .from(schema.agentRuns)
+                .where(eq(schema.agentRuns.id, run_id))
+                .limit(1)
+              if (run === undefined) {
+                throw wrapStepError(
+                  'load-run-context',
+                  `agent_run ${run_id} not found (orchestrator + concierge out of sync)`,
+                )
+              }
 
-            const [prompt] = await tx
-              .select({ content: schema.prompts.content, version: schema.prompts.version })
-              .from(schema.prompts)
-              .where(eq(schema.prompts.id, run.promptId))
-              .limit(1)
-            if (prompt === undefined) {
-              throw wrapStepError(
-                'load-run-context',
-                `prompt ${run.promptId} not found for concierge run ${run_id}`,
-              )
-            }
+              const [prompt] = await tx
+                .select({ content: schema.prompts.content, version: schema.prompts.version })
+                .from(schema.prompts)
+                .where(eq(schema.prompts.id, run.promptId))
+                .limit(1)
+              if (prompt === undefined) {
+                throw wrapStepError(
+                  'load-run-context',
+                  `prompt ${run.promptId} not found for concierge run ${run_id}`,
+                )
+              }
 
-            const [msg] = await tx
-              .select({
-                content: schema.messages.content,
-                direction: schema.messages.direction,
-              })
-              .from(schema.messages)
-              .where(eq(schema.messages.id, message_id))
-              .limit(1)
-            if (msg === undefined) {
-              throw wrapStepError(
-                'load-run-context',
-                `trigger message ${message_id} not found`,
-              )
-            }
+              const [msg] = await tx
+                .select({
+                  content: schema.messages.content,
+                  direction: schema.messages.direction,
+                })
+                .from(schema.messages)
+                .where(eq(schema.messages.id, message_id))
+                .limit(1)
+              if (msg === undefined) {
+                throw wrapStepError(
+                  'load-run-context',
+                  `trigger message ${message_id} not found`,
+                )
+              }
 
-            return {
-              promptContent: prompt.content,
-              promptVersion: prompt.version,
-              messageText: msg.content,
-              threadId: run.threadId ?? thread_id,
-            }
-          })
+              return {
+                promptContent: prompt.content,
+                promptVersion: prompt.version,
+                messageText: msg.content,
+                threadId: run.threadId ?? thread_id,
+              }
+            })
+          } catch (err) {
+            // Catches both the hand-authored wrapStepError throws above
+            // (passed through untouched by the guard) AND any infra-
+            // originated throw from withTenant / Drizzle / postgres that
+            // wouldn't otherwise carry a `[step=...]` tag. Without this,
+            // connection resets, deadlocks, RLS bypass errors etc. would
+            // surface in onFailure as failed_step='unknown'.
+            throw toTaggedStepError('load-run-context', err)
+          }
         },
       )
 
@@ -309,100 +344,117 @@ export const handleAgentConciergeRun = async (args: {
       const llm: LlmCallOutput = await step.run(
         'generate-ack',
         async (): Promise<LlmCallOutput> => {
-          const result = await generateText({
-            model: anthropic(CONCIERGE_MODEL),
-            system: preload.promptContent,
-            prompt: preload.messageText,
-            maxTokens: conciergeGuardrails.maxOutputTokens,
-            metadata: {
-              tenantId: tenant_id,
-              correlationId: correlation_id,
-              agentRunId: run_id,
-              agentCode: 'concierge',
-            },
-          })
-          if (!result.ok) {
-            // `[kind=<k>]` embeds the discriminated LlmError.kind in the
-            // message so it survives jsonErrorSchema on the way to the
-            // onFailure handler — non-standard Error properties don't.
-            throw wrapStepError(
-              'generate-ack',
-              `concierge LLM failed: ${result.error.kind}: ${result.error.message}`,
-              { kind: result.error.kind },
-            )
+          try {
+            const result = await generateText({
+              model: anthropic(CONCIERGE_MODEL),
+              system: preload.promptContent,
+              prompt: preload.messageText,
+              maxTokens: conciergeGuardrails.maxOutputTokens,
+              metadata: {
+                tenantId: tenant_id,
+                correlationId: correlation_id,
+                agentRunId: run_id,
+                agentCode: 'concierge',
+              },
+            })
+            if (!result.ok) {
+              // `[kind=<k>]` embeds the discriminated LlmError.kind in the
+              // message so it survives jsonErrorSchema on the way to the
+              // onFailure handler — non-standard Error properties don't.
+              throw wrapStepError(
+                'generate-ack',
+                `concierge LLM failed: ${result.error.kind}: ${result.error.message}`,
+                { kind: result.error.kind },
+              )
+            }
+            return result.value
+          } catch (err) {
+            // Covers both the hand-authored wrapStepError case and any
+            // generateText implementation that throws directly (e.g.
+            // tracing init failure, Anthropic SDK panic). Unknown-kind
+            // throws lose the kind tag but keep `[step=generate-ack]`
+            // attribution.
+            throw toTaggedStepError('generate-ack', err)
           }
-          return result.value
         },
       )
 
       // Step 3: insert actions row (idempotent on agent_run_id + kind).
-      const actionId = await step.run('insert-action', async () => {
-        const ctx = newTenantContext({
-          tenantId: TenantId(tenant_id),
-          correlationId: correlation_id,
-        })
-        return await withTenant(dbToUse, ctx, async (tx) => {
-          const [existing] = await tx
-            .select({ id: schema.actions.id })
-            .from(schema.actions)
-            .where(
-              and(
-                eq(schema.actions.tenantId, tenant_id),
-                eq(schema.actions.agentRunId, run_id),
-                eq(schema.actions.kind, 'send_message'),
-              ),
-            )
-            .limit(1)
-          if (existing !== undefined) {
-            return existing.id
-          }
-          const [inserted] = await tx
-            .insert(schema.actions)
-            .values({
-              tenantId: tenant_id,
-              agentRunId: run_id,
-              kind: 'send_message',
-              payload: {
-                thread_id: preload.threadId,
-                text: llm.text,
-              },
-              policyOutcome: 'approval_required',
-              status: 'pending',
-            })
-            .returning({ id: schema.actions.id })
-          if (inserted === undefined) {
-            throw wrapStepError('insert-action', 'actions insert returned no row')
-          }
-          return inserted.id
-        })
+      const actionId = await step.run('insert-action', async (): Promise<string> => {
+        try {
+          const ctx = newTenantContext({
+            tenantId: TenantId(tenant_id),
+            correlationId: correlation_id,
+          })
+          return await withTenant(dbToUse, ctx, async (tx) => {
+            const [existing] = await tx
+              .select({ id: schema.actions.id })
+              .from(schema.actions)
+              .where(
+                and(
+                  eq(schema.actions.tenantId, tenant_id),
+                  eq(schema.actions.agentRunId, run_id),
+                  eq(schema.actions.kind, 'send_message'),
+                ),
+              )
+              .limit(1)
+            if (existing !== undefined) {
+              return existing.id
+            }
+            const [inserted] = await tx
+              .insert(schema.actions)
+              .values({
+                tenantId: tenant_id,
+                agentRunId: run_id,
+                kind: 'send_message',
+                payload: {
+                  thread_id: preload.threadId,
+                  text: llm.text,
+                },
+                policyOutcome: 'approval_required',
+                status: 'pending',
+              })
+              .returning({ id: schema.actions.id })
+            if (inserted === undefined) {
+              throw wrapStepError('insert-action', 'actions insert returned no row')
+            }
+            return inserted.id
+          })
+        } catch (err) {
+          throw toTaggedStepError('insert-action', err)
+        }
       })
 
       // Step 4: finalize agent_run.
       await step.run('finalize-agent-run', async () => {
-        const ctx = newTenantContext({
-          tenantId: TenantId(tenant_id),
-          correlationId: correlation_id,
-        })
-        const latencyMs = Date.now() - start
-        await withTenant(dbToUse, ctx, async (tx) => {
-          await tx
-            .update(schema.agentRuns)
-            .set({
-              status: 'completed',
-              output: {
-                reply_text: llm.text,
-                action_id: actionId,
-                classifier_context_used: true,
-              },
-              inputTokens: llm.tokens.input,
-              outputTokens: llm.tokens.output,
-              costCents: Math.round(llm.costUsd * 100),
-              latencyMs,
-              completedAt: new Date(),
-              ...(llm.langfuseTraceId !== '' && { langfuseTraceId: llm.langfuseTraceId }),
-            })
-            .where(eq(schema.agentRuns.id, run_id))
-        })
+        try {
+          const ctx = newTenantContext({
+            tenantId: TenantId(tenant_id),
+            correlationId: correlation_id,
+          })
+          const latencyMs = Date.now() - start
+          await withTenant(dbToUse, ctx, async (tx) => {
+            await tx
+              .update(schema.agentRuns)
+              .set({
+                status: 'completed',
+                output: {
+                  reply_text: llm.text,
+                  action_id: actionId,
+                  classifier_context_used: true,
+                },
+                inputTokens: llm.tokens.input,
+                outputTokens: llm.tokens.output,
+                costCents: Math.round(llm.costUsd * 100),
+                latencyMs,
+                completedAt: new Date(),
+                ...(llm.langfuseTraceId !== '' && { langfuseTraceId: llm.langfuseTraceId }),
+              })
+              .where(eq(schema.agentRuns.id, run_id))
+          })
+        } catch (err) {
+          throw toTaggedStepError('finalize-agent-run', err)
+        }
       })
 
       // Step 5: hand off to the approval gate (BLU-25).
