@@ -79,8 +79,10 @@ psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -q \
 # -----------------------------------------------------------------------------
 # 6. Platform seed (as admin)
 # -----------------------------------------------------------------------------
-echo "  6/6 seeding agent_definitions"
+echo "  6/6 seeding agent_definitions + concierge prompt"
 psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -q \
   -f "$REPO_ROOT/packages/db/scripts/seed-agent-definitions.sql" > /dev/null
+psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -q \
+  -f "$REPO_ROOT/packages/db/scripts/seed-concierge-prompt.sql" > /dev/null
 
 echo "✓ Done."

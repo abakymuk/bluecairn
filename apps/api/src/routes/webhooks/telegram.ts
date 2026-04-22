@@ -167,6 +167,11 @@ telegramWebhook.post('/', async (c) => {
         await Promise.race([
           inngest.send({
             name: 'thread.message.received',
+            // Inngest dedupes at ingestion when `id` repeats — re-delivery
+            // of the same Telegram update produces one orchestrator run,
+            // belt-and-suspenders with our messages.idempotency_key check
+            // on the persist side (BLU-22 AC).
+            id: `event:${msg.idempotencyKey}`,
             data: {
               tenant_id: channel.tenantId,
               correlation_id: correlationId,

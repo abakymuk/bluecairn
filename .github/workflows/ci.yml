@@ -56,10 +56,25 @@ jobs:
         with:
           bun-version: "1.2"
 
-      - name: Install psql client
+      - name: Install psql client (fast path — pre-installed on ubuntu-latest)
+        # ubuntu-latest ships with psql already. `apt-get update` was
+        # hanging 5+ min on a flaky mirror during BLU-22 CI run
+        # (#24756781046). Skip the update when psql is present; keep a
+        # bounded-retry install as a fallback if the runner image ever
+        # drops psql.
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq postgresql-client
+          if command -v psql >/dev/null 2>&1; then
+            echo "psql already present: $(psql --version)"
+            exit 0
+          fi
+          echo "psql missing — installing with retries"
+          for i in 1 2 3; do
+            sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client && exit 0
+            echo "apt attempt $i failed, retrying in 10s…"
+            sleep 10
+          done
+          echo "apt install failed after 3 attempts" >&2
+          exit 1
 
       - name: Cache Turbo
         uses: actions/cache@v4
