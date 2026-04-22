@@ -20,6 +20,11 @@ const envSchema = z.object({
   // enforced via `withTenant()` wrappers on writes.
   DATABASE_URL_ADMIN: z.string().url(),
 
+  // Telegram (ADR-0009). Workers need it so `action.gate` can call
+  // `comms.send_message` in-process (BLU-25). The grammY Bot instance is
+  // constructed once at module load via `createTelegramBot`.
+  TELEGRAM_BOT_TOKEN: z.string().min(1),
+
   INNGEST_EVENT_KEY: z.string().min(1).optional(),
   INNGEST_SIGNING_KEY: z.string().startsWith('signkey-').optional(),
 
