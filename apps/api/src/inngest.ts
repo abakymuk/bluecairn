@@ -15,8 +15,13 @@ import { env } from './env.js'
  * have INNGEST_EVENT_KEY populated in Doppler.
  */
 
+// Inngest SDK auto-detects dev vs cloud from NODE_ENV. Staging runs with
+// NODE_ENV=staging (not 'production') — without explicit `isDev: false` the
+// SDK would route `.send()` to http://localhost:8288/e/dev instead of
+// Inngest Cloud. Force cloud mode when the event key is present.
 export const inngest = new Inngest({
   id: 'bluecairn-api',
   schemas: eventSchemas,
+  isDev: env.INNGEST_EVENT_KEY === undefined,
   ...(env.INNGEST_EVENT_KEY !== undefined && { eventKey: env.INNGEST_EVENT_KEY }),
 })
