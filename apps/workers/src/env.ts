@@ -38,6 +38,14 @@ const envSchema = z.object({
   // pattern as apps/api/src/env.ts. Actual calls fail loud at call time
   // if the key is required and missing.
   ANTHROPIC_API_KEY: z.string().startsWith('sk-ant-').optional().catch(undefined),
+
+  // Railway injects these automatically on every deploy. We expose
+  // `deployedSha` via `/health` so BLU-36's sync-inngest-staging CI job can
+  // confirm the new Inngest function manifest is actually live before
+  // PUTting `/api/inngest`. `undefined` in local dev is fine — the health
+  // route degrades to 'unknown'.
+  RAILWAY_GIT_COMMIT_SHA: z.string().optional(),
+  RAILWAY_DEPLOYMENT_ID: z.string().optional(),
 })
 
 const parsed = envSchema.safeParse(process.env)
