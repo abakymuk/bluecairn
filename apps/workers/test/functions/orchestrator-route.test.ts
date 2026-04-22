@@ -109,7 +109,20 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  await admin`DELETE FROM tenants WHERE slug LIKE ${`${TEST_PREFIX}%`}`
+  // audit_log has a BEFORE DELETE immutability trigger and its FK back to
+  // agent_runs doesn't cascade. BLU-34's classifier-failure test writes
+  // audit rows for this tenant; disable the trigger for cleanup (admin
+  // owns the table) and re-enable after. No production impact.
+  await admin`ALTER TABLE audit_log DISABLE TRIGGER audit_log_no_delete`
+  try {
+    await admin`
+      DELETE FROM audit_log
+      WHERE tenant_id IN (SELECT id FROM tenants WHERE slug LIKE ${`${TEST_PREFIX}%`})
+    `
+    await admin`DELETE FROM tenants WHERE slug LIKE ${`${TEST_PREFIX}%`}`
+  } finally {
+    await admin`ALTER TABLE audit_log ENABLE TRIGGER audit_log_no_delete`
+  }
   await admin.end()
 })
 
@@ -160,6 +173,7 @@ describe('handleOrchestratorRoute', () => {
     expect(result.agent_code).toBe('concierge')
     expect(result.classifier_downgraded).toBe(false)
     expect(result.policy_default).toBe('approval_required')
+    expect(result.policy_rule_count).toBe(0)
     expect(result.langfuse_trace_id).toBe('trace-from-haiku-call')
     expect(result.run_id).toBeTruthy()
 
@@ -293,7 +307,7 @@ describe('handleOrchestratorRoute', () => {
     expect((firstPayload as { id: string }).id).toBe((secondPayload as { id: string }).id)
   })
 
-  test('classifier failure: Haiku errors → handler throws (Inngest will retry)', async () => {
+  test('classifier failure: Haiku errors → handler throws + audit_log row written (BLU-34)', async () => {
     mockGenerateText.mockResolvedValueOnce({
       ok: false as const,
       error: { kind: 'rate_limit' as const, message: '429 too many requests' },
@@ -312,5 +326,73 @@ describe('handleOrchestratorRoute', () => {
       SELECT id FROM agent_runs WHERE tenant_id = ${tenantId}
     `
     expect(runs).toHaveLength(0)
+
+    // BLU-34: audit_log has one 'orchestrator.classifier_failed' row.
+    // Note: per-attempt semantics (not exactly-once) — no durable run to
+    // guard on at classifier time. Inngest retries would write additional
+    // rows. The single-call test asserts the per-attempt write.
+    const audits = await admin<{
+      event_kind: string
+      event_summary: string
+      event_payload: {
+        thread_id: string
+        message_id: string
+        classifier_error: { kind: string; message: string }
+      } | null
+    }[]>`
+      SELECT event_kind, event_summary, event_payload
+      FROM audit_log
+      WHERE tenant_id = ${tenantId}
+      AND event_kind = 'orchestrator.classifier_failed'
+    `
+    expect(audits).toHaveLength(1)
+    expect(audits[0]?.event_summary).toBe('classifier LLM failed: rate_limit')
+    expect(audits[0]?.event_payload?.thread_id).toBe(threadId)
+    expect(audits[0]?.event_payload?.message_id).toBe(messageId)
+    expect(audits[0]?.event_payload?.classifier_error.kind).toBe('rate_limit')
+  })
+
+  test('load-policy: seeded rules returned in output (BLU-34)', async () => {
+    mockGenerateText.mockResolvedValueOnce(okHaikuResult('concierge'))
+
+    // Resolve the concierge agent_definition id.
+    const [def] = await admin<{ id: string }[]>`
+      SELECT id FROM agent_definitions WHERE code = 'concierge'
+    `
+    if (def === undefined) throw new Error('fixture: concierge agent_definition')
+
+    // One tenant-wide rule (agent_definition_id NULL) + one concierge-
+    // scoped rule. Both active (effective_to NULL, effective_from now()).
+    // Plus one expired rule (effective_to yesterday) that MUST be filtered
+    // out. Plus one future rule (effective_from tomorrow) that MUST be
+    // filtered out.
+    await admin`
+      INSERT INTO policies (tenant_id, agent_definition_id, rule_key, rule_value)
+      VALUES
+        (${tenantId}, NULL, 'auto_approve_under_cents', '5000'::jsonb),
+        (${tenantId}, ${def.id}, 'quiet_hours_start', '"22:00"'::jsonb)
+    `
+    await admin`
+      INSERT INTO policies (tenant_id, agent_definition_id, rule_key, rule_value, effective_to)
+      VALUES (${tenantId}, NULL, 'expired_rule', '1'::jsonb, now() - interval '1 day')
+    `
+    await admin`
+      INSERT INTO policies (tenant_id, agent_definition_id, rule_key, rule_value, effective_from)
+      VALUES (${tenantId}, NULL, 'future_rule', '1'::jsonb, now() + interval '1 day')
+    `
+
+    const result = await handleOrchestratorRoute({
+      event: makeEvent(),
+      step: fakeStep,
+      dbOverride: db,
+    })
+
+    // Both tenant-wide + concierge-scoped rules are loaded; expired + future
+    // are filtered out by effective_to IS NULL + effective_from <= now().
+    expect(result.policy_rule_count).toBe(2)
+    expect(result.policy_default).toBe('approval_required')
+
+    // Cleanup so other tests don't see these policies.
+    await admin`DELETE FROM policies WHERE tenant_id = ${tenantId}`
   })
 })

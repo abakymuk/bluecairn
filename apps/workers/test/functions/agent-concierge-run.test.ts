@@ -135,7 +135,21 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  await admin`DELETE FROM tenants WHERE slug LIKE ${`${TEST_PREFIX}%`}`
+  // audit_log has a BEFORE DELETE immutability trigger and its
+  // `agent_run_id` FK doesn't cascade. BLU-34 started writing audit rows
+  // in tests; tenant cleanup now needs to purge audit_log first. Disable
+  // the trigger for the admin cleanup session only (admin owns the
+  // table), then re-enable. No production impact — scoped to this tx.
+  await admin`ALTER TABLE audit_log DISABLE TRIGGER audit_log_no_delete`
+  try {
+    await admin`
+      DELETE FROM audit_log
+      WHERE tenant_id IN (SELECT id FROM tenants WHERE slug LIKE ${`${TEST_PREFIX}%`})
+    `
+    await admin`DELETE FROM tenants WHERE slug LIKE ${`${TEST_PREFIX}%`}`
+  } finally {
+    await admin`ALTER TABLE audit_log ENABLE TRIGGER audit_log_no_delete`
+  }
   await admin.end()
 })
 
@@ -148,6 +162,9 @@ beforeEach(() => {
 afterEach(async () => {
   await admin`DELETE FROM actions WHERE tenant_id = ${tenantId}`
   // Reset agent_run so each test starts with status='running'.
+  // audit_log rows are append-only (immutability trigger) — BLU-34 tests
+  // filter on a per-call correlation_id so rows from earlier tests don't
+  // cross-contaminate assertions.
   await admin`
     UPDATE agent_runs
     SET    status = 'running',
@@ -295,30 +312,97 @@ describe('handleAgentConciergeRun', () => {
     expect((firstPayload as { id: string }).id).toBe((secondPayload as { id: string }).id)
   })
 
-  test('LLM failure: handler throws, no actions row, agent_run stays running (Inngest will retry)', async () => {
+  test('LLM failure (BLU-34): run marked failed + audit_log written + handler rethrows', async () => {
     mockGenerateText.mockResolvedValueOnce({
       ok: false as const,
       error: { kind: 'rate_limit' as const, message: '429 too many requests' },
     })
 
+    const ev = makeEvent()
     await expect(
-      handleAgentConciergeRun({ event: makeEvent(), step: fakeStep, dbOverride: db }),
+      handleAgentConciergeRun({ event: ev, step: fakeStep, dbOverride: db }),
     ).rejects.toThrow(/concierge LLM failed/)
 
-    // No actions row — handler threw before insert-action step
+    // No actions row — handler threw before insert-action step.
     const actions = await admin<{ id: string }[]>`
       SELECT id FROM actions WHERE tenant_id = ${tenantId}
     `
     expect(actions).toHaveLength(0)
 
-    // agent_run still 'running' — Inngest retries handle state transition.
-    // (finalize-agent-run never ran because insert-action was upstream.)
+    // BLU-34: agent_run transitioned to 'failed' with error details on output.
+    const [run] = await admin<{
+      status: string
+      output: { error_kind: string; error_message: string; failed_step: string } | null
+      completed_at: Date | null
+    }[]>`
+      SELECT status, output, completed_at FROM agent_runs WHERE id = ${runId}
+    `
+    expect(run?.status).toBe('failed')
+    expect(run?.output?.error_kind).toBe('rate_limit')
+    expect(run?.output?.failed_step).toBe('generate-ack')
+    expect(run?.output?.error_message).toMatch(/rate_limit/)
+    expect(run?.completed_at).not.toBeNull()
+
+    // BLU-34: audit_log has exactly one 'agent.run_failed' row for this call.
+    // Filter by correlation_id — audit_log is append-only (immutability
+    // trigger) so prior-test rows don't get wiped in afterEach.
+    const audits = await admin<{
+      event_kind: string
+      event_summary: string
+      event_payload: {
+        agent_code: string
+        failed_step: string
+        error_kind: string
+        error_message: string
+        correlation_id: string
+      } | null
+    }[]>`
+      SELECT event_kind, event_summary, event_payload
+      FROM audit_log
+      WHERE agent_run_id = ${runId}
+      AND event_kind = 'agent.run_failed'
+      AND event_payload->>'correlation_id' = ${ev.data.correlation_id}
+    `
+    expect(audits).toHaveLength(1)
+    expect(audits[0]?.event_kind).toBe('agent.run_failed')
+    expect(audits[0]?.event_summary).toBe('agent run failed: rate_limit')
+    expect(audits[0]?.event_payload?.agent_code).toBe('concierge')
+    expect(audits[0]?.event_payload?.failed_step).toBe('generate-ack')
+    expect(audits[0]?.event_payload?.error_kind).toBe('rate_limit')
+
+    // No action.requested emitted on failure.
+    expect(fakeStep.sendEvent).not.toHaveBeenCalled()
+  })
+
+  test('LLM failure retry idempotency (BLU-34): retry on same event → no additional audit row', async () => {
+    // Same event payload both times mirrors Inngest's retry model (same
+    // correlation_id, same run_id). markRunFailed's guarded UPDATE zero-
+    // rows on the second attempt (status already 'failed'), skipping the
+    // audit insert — so exactly one audit row per correlation_id.
+    mockGenerateText.mockResolvedValue({
+      ok: false as const,
+      error: { kind: 'rate_limit' as const, message: '429 too many requests' },
+    })
+
+    const ev = makeEvent()
+    await expect(
+      handleAgentConciergeRun({ event: ev, step: fakeStep, dbOverride: db }),
+    ).rejects.toThrow(/concierge LLM failed/)
+    await expect(
+      handleAgentConciergeRun({ event: ev, step: fakeStep, dbOverride: db }),
+    ).rejects.toThrow(/concierge LLM failed/)
+
     const [run] = await admin<{ status: string }[]>`
       SELECT status FROM agent_runs WHERE id = ${runId}
     `
-    expect(run?.status).toBe('running')
+    expect(run?.status).toBe('failed')
 
-    // No action.requested emitted on failure
-    expect(fakeStep.sendEvent).not.toHaveBeenCalled()
+    const audits = await admin<{ id: string }[]>`
+      SELECT id FROM audit_log
+      WHERE agent_run_id = ${runId}
+      AND event_kind = 'agent.run_failed'
+      AND event_payload->>'correlation_id' = ${ev.data.correlation_id}
+    `
+    expect(audits).toHaveLength(1)
   })
 })

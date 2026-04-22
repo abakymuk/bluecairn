@@ -3,7 +3,7 @@ import { TenantId, newTenantContext, type ThreadMessageReceivedData } from '@blu
 import { createDatabase, schema, withTenant, type Database } from '@bluecairn/db'
 import { generateText } from '@bluecairn/agents'
 import { startActiveObservation } from '@langfuse/tracing'
-import { and, desc, eq } from 'drizzle-orm'
+import { and, desc, eq, isNull, lte, or, sql } from 'drizzle-orm'
 import { env } from '../env.js'
 import { inngest } from '../inngest.js'
 import { logger } from '../lib/logger.js'
@@ -50,6 +50,7 @@ export interface OrchestratorRouteOutput {
   agent_code: AgentCode
   classifier_downgraded: boolean
   policy_default: 'approval_required'
+  policy_rule_count: number
   langfuse_trace_id: string
 }
 
@@ -147,6 +148,51 @@ export const handleOrchestratorRoute = async (args: {
           })
 
           if (!result.ok) {
+            // BLU-34: record tenant-visible failure before rethrowing.
+            //
+            // No `agent_runs` row exists yet at this point (insertion is
+            // step 4, after classification), so we can't mark a run failed
+            // — the audit row IS the tenant-visible signal. Under Inngest
+            // retries this step re-fires, and each attempt writes one
+            // audit row (per-attempt semantics, NOT exactly-once — there
+            // is no durable run to guard on). That's acceptable for a
+            // low-volume failure mode; downstream consumers (ops-web
+            // Activity view) can dedupe on correlation_id if they need
+            // single-row display.
+            //
+            // Audit insert itself is best-effort: if it fails, we log and
+            // still rethrow the original classifier error (the real
+            // signal). Swallowing the audit failure avoids masking the
+            // root cause with a transient DB hiccup.
+            try {
+              const ctx = newTenantContext({
+                tenantId: TenantId(tenant_id),
+                correlationId: correlation_id,
+              })
+              await withTenant(dbToUse, ctx, async (tx) => {
+                await tx.insert(schema.auditLog).values({
+                  tenantId: tenant_id,
+                  eventKind: 'orchestrator.classifier_failed',
+                  eventSummary: `classifier LLM failed: ${result.error.kind}`,
+                  eventPayload: {
+                    thread_id,
+                    message_id,
+                    correlation_id,
+                    classifier_error: {
+                      kind: result.error.kind,
+                      message: result.error.message,
+                    },
+                  },
+                })
+              })
+            } catch (auditErr) {
+              logger.error('audit_log insert failed during classifier failure', {
+                tenantId: tenant_id,
+                correlationId: correlation_id,
+                auditError: auditErr instanceof Error ? auditErr.message : String(auditErr),
+                classifierError: result.error.kind,
+              })
+            }
             throw new Error(
               `classifier call failed: ${result.error.kind}: ${result.error.message}`,
             )
@@ -264,13 +310,47 @@ export const handleOrchestratorRoute = async (args: {
           })
         })
 
-        // Step 5: policy engine stub — BLU-25 owns the real enforcement.
-        // For M1 the orchestrator just declares the default posture and
-        // lets the agent's own policies.ts (BLU-23 for Concierge) decide
-        // per-action. Kept as a `step.run` so the span shows up in the
-        // trace timeline.
+        // Step 5: load tenant + agent policies (BLU-34).
+        //
+        // Real SELECT under `withTenant` — RLS keeps the read tenant-scoped
+        // at the DB layer as well. Filters:
+        //   * agent_definition_id IS NULL OR = resolved — tenant-wide rules
+        //     AND agent-specific rules merge into the same rule list.
+        //   * effective_to IS NULL — rule is currently in force (never retired).
+        //   * effective_from <= now() — rule has actually started. Future-
+        //     dated rows in the table (preparing for a scheduled policy
+        //     change) stay inactive until their activation time. Without
+        //     this, future-dated policies leak into the current decision
+        //     set.
+        // The `allActionsDefault` stays hardcoded `approval_required` —
+        // that is the platform-wide default (ADR + AGENTS.md principle
+        // #8). Per-action enforcement against `rules` is BLU-25's job;
+        // this step just hands the rule list forward.
         const policy = await step.run('load-policy', async () => {
-          return { allActionsDefault: 'approval_required' as const }
+          const ctx = newTenantContext({
+            tenantId: TenantId(tenant_id),
+            correlationId: correlation_id,
+          })
+          return await withTenant(dbToUse, ctx, async (tx) => {
+            const rules = await tx
+              .select()
+              .from(schema.policies)
+              .where(
+                and(
+                  eq(schema.policies.tenantId, tenant_id),
+                  or(
+                    isNull(schema.policies.agentDefinitionId),
+                    eq(schema.policies.agentDefinitionId, agentDefinitionId),
+                  ),
+                  isNull(schema.policies.effectiveTo),
+                  lte(schema.policies.effectiveFrom, sql`now()`),
+                ),
+              )
+            return {
+              allActionsDefault: 'approval_required' as const,
+              rules,
+            }
+          })
         })
 
         // Step 6: hand off to the agent runtime.
@@ -295,6 +375,7 @@ export const handleOrchestratorRoute = async (args: {
         agent_code: classification.agentCode,
         classifier_downgraded: classification.downgraded,
         policy_default: policy.allActionsDefault,
+        policy_rule_count: policy.rules.length,
         langfuse_trace_id: classification.langfuseTraceId,
       }
       span.update({ output })
