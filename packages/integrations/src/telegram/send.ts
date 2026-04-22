@@ -79,6 +79,30 @@ const classifyTelegramError = (err: unknown): TelegramSendError => {
   return { kind: 'upstream', message, cause: err }
 }
 
+/**
+ * Dismiss the "loading" spinner on an inline-button tap by replying to
+ * Telegram's `callback_query` with `answerCallbackQuery`. BLU-24 invokes
+ * this fire-and-forget from the webhook (bounded by a 2s race so we stay
+ * inside Telegram's 5s webhook budget). Text is intentionally empty — the
+ * user-facing feedback comes from the follow-up message that BLU-25's
+ * `action.gate` posts after the decision is recorded.
+ *
+ * `answerCallbackQuery` is idempotent on Telegram's side: replaying with
+ * the same `callbackQueryId` returns a benign error that we classify the
+ * same way as send-message failures.
+ */
+export const answerTelegramCallbackQuery = async (
+  bot: Bot,
+  callbackQueryId: string,
+): Promise<Result<void, TelegramSendError>> => {
+  try {
+    await bot.api.answerCallbackQuery(callbackQueryId)
+    return Ok(undefined)
+  } catch (err) {
+    return Err(classifyTelegramError(err))
+  }
+}
+
 export const sendTelegramMessage = async (
   bot: Bot,
   args: TelegramSendArgs,

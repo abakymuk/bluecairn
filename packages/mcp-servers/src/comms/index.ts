@@ -1,7 +1,7 @@
 import { createDatabase } from '@bluecairn/db'
+import { createTelegramBot } from '@bluecairn/integrations/telegram'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import { Bot } from 'grammy'
 import { z } from 'zod'
 import { sendMessage, type SendMessageDeps } from './tools/send-message.js'
 
@@ -28,7 +28,7 @@ const env = envSchema.parse(process.env)
 
 const deps: SendMessageDeps = {
   db: createDatabase(env.DATABASE_URL_ADMIN),
-  bot: new Bot(env.TELEGRAM_BOT_TOKEN),
+  bot: createTelegramBot(env.TELEGRAM_BOT_TOKEN),
 }
 
 const server = new McpServer({
