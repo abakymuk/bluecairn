@@ -112,6 +112,29 @@ Sofia handles the operator's vendor relationships end-to-end: reconciling delive
 
 Before BlueCairn, the operator does this work in scraps of time — usually badly, always late. After BlueCairn, every delivery is reconciled within minutes of arrival, every dispute is in flight before the vendor closes their AR cycle, and every dollar owed is visible in the monthly statement.
 
+### Sofia v1 first-ship scope (M2)
+
+M2 ships a deliberately narrow supervised slice of the charter above. **Broader charter remains intact; these items are deferred beyond v1**, not rewritten. The v1 slice is centered on the first real money workflow: delivery → reconciliation → discrepancy detection → dispute draft → audit. It matches the smallest real operating loop at Track A signal (2026-04-22): one commissary kitchen, one live wholesale customer, low document volume, small vendor set, one repeating procurement / delivery loop, supervised mode only.
+
+**Sofia v1 capabilities (10):**
+
+- vendor memory (contacts, cutoffs, MOQs, lead times, terms, quirks, preferred + backup vendors)
+- order assist
+- expected-delivery tracking
+- delivery reconciliation
+- discrepancy detection
+- dispute / credit drafting + follow-up
+- price-sheet drift alerts
+- vendor performance memory
+- reorder assist for established recurring SKUs
+- evidence-chain preservation
+
+**Deferred beyond v1** (broader charter remains intact; these items are deferred beyond v1, not wrong): full vendor onboarding workflow, broad contract parsing / negotiation, autonomous contractual commitments, full finance close, broad inventory optimization beyond reorder assist.
+
+**Dispute send discipline in v1:** Sofia drafts disputes in Telegram; Nick approves the draft and sends manually from his own email or messaging. No automated outbound email send in v1. [BLU-40](https://linear.app/oveglobal/issue/BLU-40) tracks the future outbound-channel automation.
+
+Decomposed issue tree lives in the Linear project "M2 — Sofia Online" (milestones 1–6).
+
 ### Capabilities
 
 - **Delivery reconciliation.** Compare inbound delivery against PO. Flag short quantities, wrong items, price drift, damaged goods. Photograph invoice and delivery slip, attach to the record.
