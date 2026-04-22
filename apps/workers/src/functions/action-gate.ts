@@ -70,7 +70,19 @@ const db: Database = createDatabase(env.DATABASE_URL_ADMIN)
 const bot = createTelegramBot(env.TELEGRAM_BOT_TOKEN)
 const sendDeps: SendMessageDeps = { db, bot }
 
-export type ActionGateOutcome = 'executed' | 'rejected' | 'expired' | 'skipped'
+export type ActionGateOutcome =
+  | 'executed'
+  | 'rejected'
+  | 'expired'
+  | 'skipped'
+  /**
+   * BLU-28: the decision event carried a `tenant_id` that doesn't match the
+   * tenant that opened the approval. RLS would block the downstream update
+   * anyway, but we reject explicitly at the app layer so the audit trail
+   * shows the mismatch (and so a test can assert the short-circuit without
+   * reaching the DB).
+   */
+  | 'rejected_mismatch'
 
 export interface ActionGateOutput {
   action_id: string
@@ -334,6 +346,43 @@ export const handleActionGate = async (args: {
         if: `async.data.approval_request_id == "${approvalRequestId}"`,
       })
 
+      // --- Step 4b: cross-tenant decision guard (BLU-28) --------------------
+      // The CEL `match` on `approval_request_id` in step.waitForEvent is a
+      // string-equality check; it doesn't verify that the event's tenant_id
+      // matches the tenant that opened the approval. A forged event (upstream
+      // smuggling, manual Inngest push, etc.) could carry a mismatched
+      // tenant. RLS would reject the resulting UPDATE, but at the audit
+      // layer we want an explicit `approval.decision.tenant_mismatch`
+      // row — otherwise the only trace is "update affected 0 rows" inside
+      // the DB, which is invisible in ops-web.
+      if (decision !== null && decision.data.tenant_id !== tenant_id) {
+        await recordMismatch({
+          dbToUse,
+          step,
+          tenantId: tenant_id,
+          correlationId: correlation_id,
+          actionId: action_id,
+          approvalRequestId,
+          decisionEventTenantId: decision.data.tenant_id,
+          userTelegramId: decision.data.user_telegram_id,
+        })
+        const latency = Date.now() - start
+        const out: ActionGateOutput = {
+          action_id,
+          approval_request_id: approvalRequestId,
+          outcome: 'rejected_mismatch',
+          latency_ms: latency,
+        }
+        span.update({ output: out })
+        logger.warn('action.gate rejected cross-tenant decision', {
+          tenantId: tenant_id,
+          actionId: action_id,
+          approvalRequestId,
+          decisionEventTenantId: decision.data.tenant_id,
+        })
+        return out
+      }
+
       // --- Step 5: branch on decision ---------------------------------------
       if (decision === null) {
         await expireApproval({
@@ -444,6 +493,42 @@ interface BranchArgs {
   correlationId: string
   actionId: string
   approvalRequestId: string
+}
+
+/**
+ * BLU-28: record a cross-tenant decision event. Writes a single audit row
+ * under the **action's** tenant (not the forged decision event's tenant),
+ * because that's where operators looking for forensics about action_id X
+ * will search. No state transitions on approval_requests or actions —
+ * the mismatch is a no-op on correctness; it just needs to be observable.
+ */
+const recordMismatch = async (
+  args: BranchArgs & {
+    decisionEventTenantId: string
+    userTelegramId: number
+  },
+): Promise<void> => {
+  await args.step.run('record-decision-mismatch', async () => {
+    const ctx = newTenantContext({
+      tenantId: TenantId(args.tenantId),
+      correlationId: args.correlationId,
+    })
+    await withTenant(args.dbToUse, ctx, async (tx) => {
+      await tx.insert(schema.auditLog).values({
+        tenantId: args.tenantId,
+        actionId: args.actionId,
+        eventKind: 'approval.decision.tenant_mismatch',
+        eventSummary: `cross-tenant decision rejected for approval ${args.approvalRequestId}`,
+        eventPayload: {
+          approval_request_id: args.approvalRequestId,
+          expected_tenant_id: args.tenantId,
+          decision_event_tenant_id: args.decisionEventTenantId,
+          user_telegram_id: args.userTelegramId,
+          correlation_id: args.correlationId,
+        },
+      })
+    })
+  })
 }
 
 const markApproved = async (args: BranchArgs & { userTelegramId: number }): Promise<void> => {
