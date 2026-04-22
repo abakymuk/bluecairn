@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm'
 import { index, inet, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core'
 import { actions } from './agents/actions.js'
 import { agentRuns } from './agents/agent-runs.js'
+import { authUser } from './auth/auth-user.js'
 import { users } from './platform/users.js'
 
 /**
@@ -13,6 +14,14 @@ import { users } from './platform/users.js'
  *
  * Never write UPDATE or DELETE against this table.
  *
+ * `user_id` vs `auth_user_id` (BLU-27):
+ *   - `user_id` — domain user (tenant-user membership, future ops-pod bridge).
+ *     Populated when a tenant user's action is recorded (none today; M2+).
+ *   - `auth_user_id` — Better Auth ops-pod identity (who logged into ops-web).
+ *     Populated by `ops_web_read` events from the thread viewer. Either or
+ *     both can be null; system-generated events (approval.granted,
+ *     action.executed, etc.) leave both null.
+ *
  * See DATA-MODEL.md § audit_log and ARCHITECTURE.md principle #9.
  */
 export const auditLog = pgTable(
@@ -21,9 +30,10 @@ export const auditLog = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     tenantId: uuid('tenant_id'), // nullable for platform-global events
     userId: uuid('user_id').references(() => users.id),
+    authUserId: text('auth_user_id').references(() => authUser.id, { onDelete: 'set null' }),
     agentRunId: uuid('agent_run_id').references(() => agentRuns.id),
     actionId: uuid('action_id').references(() => actions.id),
-    eventKind: text('event_kind').notNull(), // 'action_executed', 'approval_granted', ...
+    eventKind: text('event_kind').notNull(), // 'action_executed', 'approval_granted', 'ops_web_read', ...
     eventSummary: text('event_summary').notNull(),
     eventPayload: jsonb('event_payload'),
     ipAddress: inet('ip_address'),
@@ -33,6 +43,7 @@ export const auditLog = pgTable(
   (table) => [
     index('idx_audit_tenant_time').on(table.tenantId, sql`${table.occurredAt} desc`),
     index('idx_audit_kind_time').on(table.eventKind, sql`${table.occurredAt} desc`),
+    index('idx_audit_auth_user_time').on(table.authUserId, sql`${table.occurredAt} desc`),
   ],
 )
 

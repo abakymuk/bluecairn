@@ -1,0 +1,261 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`<TimelineItem /> — snapshots + explicit assertions > kind=action > snapshot 1`] = `
+<li
+  class="flex gap-3 rounded-md border bg-card px-4 py-3 text-sm shadow-sm"
+  data-kind="action.send_message"
+>
+  <div
+    class="min-w-0 flex-1"
+  >
+    <div
+      class="flex flex-wrap items-center gap-2"
+    >
+      <span
+        class="inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium border-green-600/30 bg-green-600/10 text-green-700 dark:text-green-400"
+      >
+        action.send_message
+      </span>
+      <span
+        class="inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium border-green-600/30 bg-green-600/10 text-green-700 dark:text-green-400"
+      >
+        executed
+      </span>
+      <span
+        class="inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium border-border bg-muted text-muted-foreground"
+      >
+        approval_required
+      </span>
+    </div>
+    <div
+      class="mt-2 space-y-1 text-muted-foreground"
+    >
+      <p
+        class="truncate text-xs"
+      >
+        <span
+          class="font-medium"
+        >
+          payload:
+        </span>
+         
+        Thanks — we will keep an eye on that.
+      </p>
+    </div>
+  </div>
+  <time
+    class="shrink-0 text-xs text-muted-foreground"
+    datetime="2026-04-22T04:07:00.000Z"
+    title="2026-04-22T04:07:00.000Z"
+  >
+    3 minutes ago
+  </time>
+</li>
+`;
+
+exports[`<TimelineItem /> — snapshots + explicit assertions > kind=agent_run > snapshot 1`] = `
+<li
+  class="flex gap-3 rounded-md border bg-card px-4 py-3 text-sm shadow-sm"
+  data-kind="agent.concierge"
+>
+  <div
+    class="min-w-0 flex-1"
+  >
+    <div
+      class="flex flex-wrap items-center gap-2"
+    >
+      <span
+        class="inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium border-green-600/30 bg-green-600/10 text-green-700 dark:text-green-400"
+      >
+        agent.concierge
+      </span>
+      <span
+        class="inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium border-green-600/30 bg-green-600/10 text-green-700 dark:text-green-400"
+      >
+        completed
+      </span>
+      <span
+        class="text-xs text-muted-foreground"
+      >
+        claude-haiku-4-5
+      </span>
+      <a
+        class="inline-flex items-center gap-1 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+        href="https://us.cloud.langfuse.com/project/test-project-id/traces/trace-abc"
+        rel="noreferrer"
+        target="_blank"
+      >
+        Langfuse 
+        <svg
+          aria-hidden="true"
+          class="lucide lucide-external-link h-3 w-3"
+          fill="none"
+          height="24"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="24"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M15 3h6v6"
+          />
+          <path
+            d="M10 14 21 3"
+          />
+          <path
+            d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"
+          />
+        </svg>
+      </a>
+    </div>
+    <div
+      class="mt-2 space-y-1 text-muted-foreground"
+    >
+      <p
+        class="text-xs"
+      >
+        <span
+          class="font-medium"
+        >
+          tokens:
+        </span>
+         
+        60 in · 22 out
+      </p>
+      <p
+        class="text-xs"
+      >
+        <span
+          class="font-medium"
+        >
+          cost:
+        </span>
+         
+        $0.00
+         
+        <span
+          class="ml-1 text-[10px] italic"
+        >
+          (sub-cent — see Langfuse for fractional)
+        </span>
+      </p>
+      <p
+        class="text-xs"
+      >
+        <span
+          class="font-medium"
+        >
+          latency:
+        </span>
+         
+        417ms
+      </p>
+    </div>
+  </div>
+  <time
+    class="shrink-0 text-xs text-muted-foreground"
+    datetime="2026-04-22T04:06:00.000Z"
+    title="2026-04-22T04:06:00.000Z"
+  >
+    4 minutes ago
+  </time>
+</li>
+`;
+
+exports[`<TimelineItem /> — snapshots + explicit assertions > kind=approval_request > snapshot 1`] = `
+<li
+  class="flex gap-3 rounded-md border bg-card px-4 py-3 text-sm shadow-sm"
+  data-kind="approval"
+>
+  <div
+    class="min-w-0 flex-1"
+  >
+    <div
+      class="flex flex-wrap items-center gap-2"
+    >
+      <span
+        class="inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium border-blue-600/30 bg-blue-600/10 text-blue-700 dark:text-blue-400"
+      >
+        approval
+      </span>
+      <span
+        class="inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium border-blue-600/30 bg-blue-600/10 text-blue-700 dark:text-blue-400"
+      >
+        pending
+      </span>
+    </div>
+    <div
+      class="mt-2 space-y-1 text-muted-foreground"
+    >
+      <p
+        class="text-xs"
+      >
+        Approve sending "Thanks — …"
+      </p>
+      <p
+        class="text-xs"
+      >
+        <span
+          class="font-medium"
+        >
+          expires:
+        </span>
+         
+        in 24 hours
+      </p>
+    </div>
+  </div>
+  <time
+    class="shrink-0 text-xs text-muted-foreground"
+    datetime="2026-04-22T04:08:00.000Z"
+    title="2026-04-22T04:08:00.000Z"
+  >
+    2 minutes ago
+  </time>
+</li>
+`;
+
+exports[`<TimelineItem /> — snapshots + explicit assertions > kind=message > snapshot 1`] = `
+<li
+  class="flex gap-3 rounded-md border bg-card px-4 py-3 text-sm shadow-sm"
+  data-kind="inbound"
+>
+  <div
+    class="min-w-0 flex-1"
+  >
+    <div
+      class="flex flex-wrap items-center gap-2"
+    >
+      <span
+        class="inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium border-border bg-muted text-muted-foreground"
+      >
+        inbound
+      </span>
+      <span
+        class="font-medium"
+      >
+        user
+      </span>
+    </div>
+    <div
+      class="mt-2 space-y-1 text-muted-foreground"
+    >
+      <p
+        class="whitespace-pre-wrap text-foreground"
+      >
+        testing BLU-25 approval flow
+      </p>
+    </div>
+  </div>
+  <time
+    class="shrink-0 text-xs text-muted-foreground"
+    datetime="2026-04-22T04:05:00.000Z"
+    title="2026-04-22T04:05:00.000Z"
+  >
+    5 minutes ago
+  </time>
+</li>
+`;

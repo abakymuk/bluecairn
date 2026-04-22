@@ -77,6 +77,8 @@ psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -q \
   -f "$REPO_ROOT/packages/db/migrations-manual/0004_messages_tool_call_link.sql"
 psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -q \
   -f "$REPO_ROOT/packages/db/migrations-manual/0005_auth_tables.sql"
+psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -q \
+  -f "$REPO_ROOT/packages/db/migrations-manual/0006_audit_log_auth_user.sql"
 
 # -----------------------------------------------------------------------------
 # 6. Platform seed (as admin)

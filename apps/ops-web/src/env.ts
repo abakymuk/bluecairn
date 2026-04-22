@@ -50,6 +50,12 @@ const envSchema = z.object({
   // SHA-match CI step. `unknown` in local dev.
   RAILWAY_GIT_COMMIT_SHA: z.string().optional(),
   RAILWAY_DEPLOYMENT_ID: z.string().optional(),
+
+  // Langfuse deep-link (BLU-27) — used by timeline-item to link every
+  // agent_run card to its trace in Langfuse Cloud. Optional: if either
+  // var is missing the "Langfuse" link is omitted gracefully.
+  LANGFUSE_HOST: z.string().url().optional(),
+  LANGFUSE_PROJECT_ID: z.string().optional(),
 })
 
 const parsed = envSchema.safeParse(process.env)
