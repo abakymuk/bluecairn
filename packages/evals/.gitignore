@@ -1,0 +1,4 @@
+# Per-run harness reports are ephemeral. Only explicitly-named baselines
+# (e.g. reports/baseline-2026-04-22.md) are committed.
+reports/*.md
+!reports/baseline-*.md

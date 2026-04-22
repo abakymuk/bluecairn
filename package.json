@@ -21,6 +21,7 @@
     "db:push": "cd packages/db && bun --bun drizzle-kit push",
     "db:studio": "cd packages/db && bun --bun drizzle-kit studio",
     "db:bootstrap": "cd packages/db && bun run scripts/bootstrap-internal-tenant.ts",
+    "harness:m1": "bun run --cwd packages/evals harness:m1",
     "clean": "turbo run clean && rm -rf node_modules"
   },
   "devDependencies": {
