@@ -158,13 +158,16 @@
       "name": "@bluecairn/evals",
       "version": "0.0.0",
       "dependencies": {
+        "@ai-sdk/anthropic": "^1",
         "@bluecairn/agents": "workspace:*",
         "@bluecairn/core": "workspace:*",
         "postgres": "^3.4.5",
+        "zod": "^3.24.1",
       },
       "devDependencies": {
         "@types/bun": "^1.2.0",
         "typescript": "^5.7.2",
+        "vitest": "^2.1.8",
       },
     },
     "packages/integrations": {

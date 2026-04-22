@@ -24,6 +24,17 @@ export interface LlmMetadata {
   correlationId: string
   agentRunId?: string
   agentCode?: string
+  /**
+   * Eval suite identifier, set by the eval runner (ADR-0011).
+   * Format: `<agent-code>/<suite>` — e.g. `concierge/unit`.
+   * Surfaces on Langfuse traces as `metadata.eval` for groupable filtering.
+   */
+  eval?: string
+  /**
+   * Eval case identifier inside the suite (ADR-0011). Surfaces as
+   * `metadata.case_id` on the Langfuse trace.
+   */
+  caseId?: string
 }
 
 export interface LlmCallInput {
@@ -130,6 +141,10 @@ export const generateText = async (
             correlation_id: call.metadata.correlationId,
             ...(call.metadata.agentRunId !== undefined && {
               agent_run_id: call.metadata.agentRunId,
+            }),
+            ...(call.metadata.eval !== undefined && { eval: call.metadata.eval }),
+            ...(call.metadata.caseId !== undefined && {
+              case_id: call.metadata.caseId,
             }),
           },
         },

@@ -11,18 +11,21 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
-    "test": "echo 'stub package — no tests'",
-    "eval": "echo 'stub package — no eval suites'",
+    "test": "vitest run --passWithNoTests",
+    "eval": "bun run src/runner/cli.ts",
     "harness:m1": "bun run src/harness/m1-exit-gate.ts",
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {
-    "@bluecairn/core": "workspace:*",
+    "@ai-sdk/anthropic": "^1",
     "@bluecairn/agents": "workspace:*",
-    "postgres": "^3.4.5"
+    "@bluecairn/core": "workspace:*",
+    "postgres": "^3.4.5",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/bun": "^1.2.0",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
   }
 }

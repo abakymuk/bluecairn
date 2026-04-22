@@ -66,7 +66,7 @@ Full detail: `docs/ARCHITECTURE.md`.
 - **MCP (Anthropic SDK)** — contract between agents and external capabilities.
 - **Inngest Cloud** for durable execution.
 - **Langfuse Cloud** (Hobby tier, US region) for LLM observability (ADR-0010). Self-host deferred to Month 12+.
-- **Braintrust + Promptfoo** for eval suites.
+- **In-repo TypeScript eval runner** at `packages/evals/` (ADR-0011). `bun run eval <agent-code>`. Advisory CI workflow, not a blocking gate. Braintrust / Promptfoo rejected for M2/M3.
 - **Telegram Bot API via `grammY`** — MVP primary channel. Twilio Conversations (WhatsApp + SMS) deferred to Month 11+.
 - **Turborepo** monorepo with Bun workspaces.
 

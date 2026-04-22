@@ -681,15 +681,17 @@ The ops pod's response goes back through the same thread. The operator sees cont
 
 ### Prompt versioning and eval gating
 
-Every agent's prompt has a version. Every prompt change goes through:
-1. Local iteration in Promptfoo or Braintrust.
-2. Regression against the agent's eval suite (unit, regression, rubric, adversarial).
-3. PR with eval results attached.
-4. Shadow deployment to 1–3 internal tenants (our own operations) for 3–7 days.
-5. Gradual rollout to external tenants.
-6. Monitoring for behavioral drift via Langfuse.
+Every agent's prompt has a version. The authored `packages/agents/src/<code>/prompt.md` is the source of truth; the DB seed at `packages/db/scripts/seed-<code>-prompt-v<N>.sql` is derived from it (ADR-0011). Every prompt change goes through:
 
-A prompt does not ship without passing all four eval dimensions. This is enforced in CI.
+1. Edit `prompt.md` locally (bump frontmatter `version:`).
+2. Run the agent's eval suite via `bun run eval <code>` in `packages/evals/` (unit now; regression / rubric / adversarial as they land per ROADMAP).
+3. Regenerate the SQL seed from the new `.md` body.
+4. PR with eval Markdown report attached (auto-written to `packages/evals/reports/`).
+5. Shadow deployment to 1–3 internal tenants (our own operations) for 3–7 days.
+6. Gradual rollout to external tenants.
+7. Monitoring for behavioral drift via Langfuse (`metadata.eval = "<code>/<suite>"`).
+
+CI runs the eval suite on any PR touching agent code, but **the workflow is advisory** (ADR-0011) — authors read the pass/fail signal; a red eval does not auto-block merge at M2/M3 volume. Promoting to a blocking gate is itself an ADR.
 
 ### Memory access
 

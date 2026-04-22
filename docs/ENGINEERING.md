@@ -262,7 +262,7 @@ For code that crosses a boundary: database, MCP call, Inngest function, HTTP han
 
 Every handler, every MCP tool, every Inngest function has at least one happy-path integration test and one error-path test.
 
-### Layer 3: Agent evals (Braintrust + Promptfoo)
+### Layer 3: Agent evals (in-repo runner, ADR-0011)
 
 Evals test agent behavior, not code correctness. A code test says "this function returns X for input Y". An eval says "when Sofia sees this delivery-reconciliation scenario, she should draft a dispute and flag the correct amount".
 
@@ -273,13 +273,15 @@ Every agent has four eval dimensions:
 3. **Rubric evals**: LLM-as-judge scoring against a written rubric (tone, completeness, accuracy).
 4. **Adversarial evals**: prompt injection, policy violation attempts, edge cases designed to break the agent.
 
+Evals are executed by the in-repo runner in `packages/evals/` via `bun run eval <agent-code>`. Per ADR-0011 we do not use Braintrust or Promptfoo for M2/M3 — a minimal TypeScript runner reuses the existing `generateText` wrapper and tags every eval call with `metadata.eval` + `metadata.case_id` for Langfuse filtering. See `packages/evals/README.md` for authoring cases.
+
 Evals run in CI on any change that touches:
 - An agent's prompt file.
 - An agent's tool registration.
 - An agent's policy.
 - Any MCP server the agent uses.
 
-A failing eval blocks merge. Exceptions require an explicit human override with a PR note explaining why.
+**CI evals are advisory, not blocking** — the workflow exits 0 regardless of per-case outcomes and surfaces pass/fail via workflow status + an uploaded Markdown report. Locally the CLI exits 1 on failure so authors see a clear signal. Promoting evals to a blocking merge gate requires a fresh ADR capturing the operational trigger (see ADR-0011 revisit conditions).
 
 ### What we do not test
 
