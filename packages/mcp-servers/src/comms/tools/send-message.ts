@@ -5,6 +5,7 @@ import {
   type TelegramInlineKeyboardMarkup,
   type TelegramSendError,
 } from '@bluecairn/integrations/telegram'
+import { startActiveObservation } from '@langfuse/tracing'
 import { and, eq } from 'drizzle-orm'
 import type { Bot } from 'grammy'
 
@@ -77,8 +78,63 @@ export interface SendMessageDeps {
 
 const MCP_SERVER = 'comms'
 const TOOL_NAME = 'send_message'
+const OBSERVATION_NAME = 'tool.comms.send_message'
 
+/**
+ * BLU-33: every `send_message` call lands as a `tool.comms.send_message`
+ * observation in Langfuse, parented to whatever trace the caller opened
+ * (agent_run span from BLU-22+). Metadata carries tenant / thread / agent
+ * run ids so ops-web can filter by any of them; output carries the tool
+ * call id + telegram message id + cached flag (happy path) or error_kind
+ * (failure path).
+ */
 export const sendMessage = async (
+  deps: SendMessageDeps,
+  input: SendMessageInput,
+): Promise<Result<SendMessageOutput, SendMessageError>> => {
+  return await startActiveObservation(
+    OBSERVATION_NAME,
+    async (span) => {
+      span.update({
+        input: { thread_id: input.threadId }, // text omitted — avoid PII bloat in traces; message content lives in DB + agent_run LLM spans already
+        metadata: {
+          tenant_id: input.tenantId,
+          thread_id: input.threadId,
+          agent_run_id: input.agentRunId,
+          idempotency_key: input.idempotencyKey,
+          correlation_id: input.correlationId,
+        },
+      })
+
+      const result = await executeSendMessage(deps, input)
+
+      if (result.ok) {
+        span.update({
+          output: {
+            tool_call_id: result.value.toolCallId,
+            message_id: result.value.messageId,
+            telegram_message_id: result.value.telegramMessageId,
+            cached: result.value.cached,
+          },
+        })
+      } else {
+        span.update({
+          output: {
+            error_kind: result.error.kind,
+            ...(result.error.telegramErrorKind !== undefined && {
+              telegram_error_kind: result.error.telegramErrorKind,
+            }),
+          },
+        })
+      }
+
+      return result
+    },
+    { asType: 'tool' },
+  )
+}
+
+const executeSendMessage = async (
   deps: SendMessageDeps,
   input: SendMessageInput,
 ): Promise<Result<SendMessageOutput, SendMessageError>> => {
