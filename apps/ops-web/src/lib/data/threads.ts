@@ -1,6 +1,6 @@
 import { schema } from '@bluecairn/db'
 import { and, eq, isNull, sql } from 'drizzle-orm'
-import { db } from '@/lib/db'
+import { dbAdmin as db } from '@/lib/db-admin'
 
 /**
  * Data layer for the ops-web thread viewer (BLU-27). Admin-role client

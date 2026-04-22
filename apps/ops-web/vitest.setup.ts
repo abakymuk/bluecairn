@@ -13,6 +13,7 @@ import { cleanup } from '@testing-library/react'
 
 process.env.NODE_ENV = 'test'
 process.env.DATABASE_URL = 'postgresql://test:test@localhost:5432/test'
+process.env.DATABASE_URL_ADMIN = 'postgresql://test-admin:test@localhost:5432/test'
 process.env.BETTER_AUTH_SECRET = 'test-stub-better-auth-secret-at-least-32-chars-long-please'
 process.env.BETTER_AUTH_URL = 'http://localhost:3002'
 process.env.GOOGLE_CLIENT_ID = 'test-client-id'

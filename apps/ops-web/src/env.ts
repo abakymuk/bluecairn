@@ -13,8 +13,17 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'staging', 'production', 'test']).default('development'),
 
   // --- Database (shared with the rest of the monorepo) ---
+  //
+  // `DATABASE_URL` (bluecairn_app role, RLS-subject) — used by Better
+  // Auth for its auth_* tables (no RLS on those, role works fine).
+  //
+  // `DATABASE_URL_ADMIN` (bluecairn_admin role, table owner, bypasses RLS)
+  // — used by ops-pod data queries (`lib/db-admin.ts`). Ops-pod operators
+  // are cross-tenant by design; enforcing RLS via app role would require
+  // setting `app.current_tenant` per query, which defeats the purpose.
+  // Admin role is the correct posture per ADR-0007 + data-model.
   DATABASE_URL: z.string().url(),
-  DATABASE_URL_ADMIN: z.string().url().optional(),
+  DATABASE_URL_ADMIN: z.string().url(),
 
   // --- Better Auth (BLU-26) ---
   // Secret used to sign session cookies + CSRF tokens. Rotate via
