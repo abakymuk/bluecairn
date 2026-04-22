@@ -137,6 +137,7 @@ telegramWebhook.post('/', async (c) => {
           tenantId: channel.tenantId,
           threadId: thread.id,
           authorKind: 'user',
+          direction: 'inbound',
           content: msg.text ?? '',
           externalMessageId: msg.externalMessageId,
           idempotencyKey: msg.idempotencyKey,

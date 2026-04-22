@@ -105,9 +105,16 @@ describe('Telegram webhook', () => {
     expect(res.status).toBe(200)
 
     const rows = await admin<
-      { id: string; content: string; idempotency_key: string; external_message_id: string }[]
+      {
+        id: string
+        content: string
+        idempotency_key: string
+        external_message_id: string
+        direction: string
+        tool_call_id: string | null
+      }[]
     >`
-      SELECT id, content, idempotency_key, external_message_id
+      SELECT id, content, idempotency_key, external_message_id, direction, tool_call_id
       FROM   messages
       WHERE  tenant_id = ${tenantId}
         AND  external_message_id = ${String(messageId)}
@@ -115,6 +122,9 @@ describe('Telegram webhook', () => {
     expect(rows).toHaveLength(1)
     expect(rows[0]?.content).toBe('hello from integration test')
     expect(rows[0]?.idempotency_key).toBe(`tg:${TEST_CHAT_ID}:${messageId}`)
+    // BLU-32: explicit direction + tool_call_id null for inbound user messages
+    expect(rows[0]?.direction).toBe('inbound')
+    expect(rows[0]?.tool_call_id).toBeNull()
 
     // Thread was created and linked to the channel
     const threads = await admin<{ id: string }[]>`

@@ -68,11 +68,13 @@ psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -q \
 # -----------------------------------------------------------------------------
 # 5. RLS policies + audit-log immutability triggers (as admin)
 # -----------------------------------------------------------------------------
-echo "  5/6 applying RLS + audit triggers"
+echo "  5/6 applying RLS + audit triggers + schema deltas"
 psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -q \
   -f "$REPO_ROOT/packages/db/migrations-manual/0002_rls_policies.sql"
 psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -q \
   -f "$REPO_ROOT/packages/db/migrations-manual/0003_audit_triggers.sql"
+psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -q \
+  -f "$REPO_ROOT/packages/db/migrations-manual/0004_messages_tool_call_link.sql"
 
 # -----------------------------------------------------------------------------
 # 6. Platform seed (as admin)

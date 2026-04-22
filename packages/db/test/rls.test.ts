@@ -65,13 +65,13 @@ beforeAll(async () => {
   threadBId = tB.id
 
   const [mA] = await admin<{ id: string }[]>`
-    INSERT INTO messages (tenant_id, thread_id, author_kind, content)
-    VALUES (${tenantAId}, ${threadAId}, 'user', 'msg A')
+    INSERT INTO messages (tenant_id, thread_id, author_kind, direction, content)
+    VALUES (${tenantAId}, ${threadAId}, 'user', 'inbound', 'msg A')
     RETURNING id
   `
   const [mB] = await admin<{ id: string }[]>`
-    INSERT INTO messages (tenant_id, thread_id, author_kind, content)
-    VALUES (${tenantBId}, ${threadBId}, 'user', 'msg B')
+    INSERT INTO messages (tenant_id, thread_id, author_kind, direction, content)
+    VALUES (${tenantBId}, ${threadBId}, 'user', 'inbound', 'msg B')
     RETURNING id
   `
   if (!mA || !mB) throw new Error('fixture: message insert returned no rows')
@@ -119,8 +119,8 @@ describe('RLS tenant isolation', () => {
       asApp(tenantAId, async (sql) => {
         // Attempt to smuggle a message into tenant B while session is tenant A
         await sql`
-          INSERT INTO messages (tenant_id, thread_id, author_kind, content)
-          VALUES (${tenantBId}, ${threadBId}, 'user', 'smuggled')
+          INSERT INTO messages (tenant_id, thread_id, author_kind, direction, content)
+          VALUES (${tenantBId}, ${threadBId}, 'user', 'inbound', 'smuggled')
         `
       }),
     ).rejects.toThrow(/row-level security|new row violates/i)

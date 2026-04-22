@@ -265,8 +265,10 @@ export const sendMessage = async (
           tenantId: input.tenantId,
           threadId: input.threadId,
           authorKind: 'agent',
+          direction: 'outbound',
           content: input.text,
           agentRunId: input.agentRunId,
+          toolCallId,
           externalMessageId: String(telegramMessageId),
           idempotencyKey: messageIdempotencyKey,
         })
