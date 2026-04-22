@@ -96,6 +96,8 @@ Do not write an ADR for:
 | [0006](adr/0006-multi-tenant-from-day-one.md) | Multi-tenant from day one | Accepted | 2026-04-20 |
 | [0007](adr/0007-chat-first-no-customer-dashboard.md) | Chat-first interface, no customer dashboard | Accepted | 2026-04-20 |
 | [0008](adr/0008-managed-service-not-saas.md) | Managed service, not SaaS | Accepted | 2026-04-20 |
+| [0009](adr/0009-telegram-first-for-mvp.md) | Telegram-first for MVP | Accepted | 2026-04-22 |
+| [0010](adr/0010-langfuse-cloud-for-m0-m1.md) | Langfuse Cloud for M0/M1 | Accepted | 2026-04-22 |
 
 ---
 
