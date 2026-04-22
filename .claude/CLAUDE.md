@@ -20,13 +20,13 @@ Product concept: `docs/PRODUCT.md`.
 
 ## Current phase
 
-**Month 0 — Foundation** (April–May 2026).
+**Between M1 and M2** as of 2026-04-22.
 
-Goal of Month 0: Nick (cofounder, operator) is sending Telegram messages to BlueCairn; platform persists them with multi-tenant isolation verified end-to-end; Langfuse is live; monorepo is up on CI.
+M0 (Foundation) + M1 (Orchestrator + Comms) shipped ~3 weeks ahead of ROADMAP schedule. Staging runs the Concierge catchall agent on Telegram with inline-button approval flow, Langfuse Cloud tracing, and the internal ops-web console. M0 + M1 Linear projects are at 100% milestone progress.
 
-What exists right now: this scaffolding. Nothing running in production yet.
+**Next Linear project:** M2 — Sofia Online. Milestone-0 (`M1 debt + Sofia prereqs`) is underway — closes BLU-34 (orchestrator/agent failure paths), BLU-35 (eval harness), BLU-38 (doc actualization), and the M1 retrospective. Sofia build itself (milestones 1–6) is blocked on Track A confirmation from Nick (real vendor relationships are Sofia's training data per ROADMAP Month 2).
 
-Roadmap: `docs/ROADMAP.md`. Current month's Linear project: **M0 — Foundation** (BlueCairn team, key `BLU`).
+Roadmap: `docs/ROADMAP.md`. Linear: **M2 — Sofia Online** (BlueCairn team, key `BLU`).
 
 ---
 
@@ -78,8 +78,8 @@ Full detail: `docs/ARCHITECTURE.md`.
 bluecairn/
 ├── apps/
 │   ├── api/              # Main API (Hono) — webhooks, orchestrator entry
-│   ├── workers/          # Inngest functions — agent runs, scheduled jobs  [M1+]
-│   ├── ops-web/          # Internal console for ops pod (Next.js)  [M1+]
+│   ├── workers/          # Inngest functions — agent runs, scheduled jobs
+│   ├── ops-web/          # Internal console for ops pod (Next.js)
 │   └── admin-web/        # Super-admin console (Next.js)  [M3+]
 ├── packages/
 │   ├── core/             # Shared domain types, utilities
@@ -101,7 +101,7 @@ bluecairn/
 │   ├── DECISIONS.md
 │   ├── LINEAR-SETUP.md
 │   └── adr/
-│       └── 0001-... through 0009-*.md
+│       └── 0001-... through 0010-*.md
 └── .claude/
     ├── CLAUDE.md         # This file
     └── commands/         # Custom slash commands for Claude Code
@@ -233,8 +233,8 @@ REDIS_URL=rediss://default:***@...upstash.io:6379
 TELEGRAM_BOT_TOKEN=***
 TELEGRAM_WEBHOOK_SECRET=***
 
-# Langfuse (self-hosted)
-LANGFUSE_HOST=https://langfuse.bluecairn.internal
+# Langfuse Cloud (ADR-0010)
+LANGFUSE_HOST=https://us.cloud.langfuse.com
 LANGFUSE_PUBLIC_KEY=pk-***
 LANGFUSE_SECRET_KEY=sk-***
 
@@ -270,10 +270,10 @@ A hard-learned list. Check against it when something seems off.
 ## Links
 
 - **Linear team**: https://linear.app/oveglobal/team/BLU/active
-- **Current project (M0)**: see Linear, project "M0 — Foundation"
-- **GitHub repo**: (TBD after push)
+- **Current project**: see Linear, project "M2 — Sofia Online"
+- **GitHub repo**: https://github.com/abakymuk/bluecairn
 - **Neon**: console.neon.tech (project `bluecairn`)
-- **Langfuse**: (TBD after self-host)
+- **Langfuse**: https://us.cloud.langfuse.com (Cloud Hobby US, ADR-0010)
 
 ---
 
