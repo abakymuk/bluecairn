@@ -116,13 +116,57 @@ jobs:
         run: bunx turbo build
 
   # ---------------------------------------------------------------------------
+  # BLU-36 follow-up: drive the workers-staging deploy from CI with an explicit
+  # commit SHA.
+  #
+  # Why: Railway's auto-injected `RAILWAY_GIT_COMMIT_SHA` is only populated on
+  # Git-triggered deploys. Non-Git triggers (Doppler live-sync from BLU-31,
+  # manual redeploys, `railway up` CLI) leave it empty — the deploy still runs
+  # the correct latest-main code, but `/health.deployedSha` reports 'unknown',
+  # which breaks `sync-inngest-staging`'s polling (see failed run of PR #27).
+  #
+  # Fix: CI sets `DEPLOY_COMMIT_SHA` on the workers-staging service before each
+  # deploy. Setting a Railway variable (without `--skip-deploys`) triggers a
+  # redeploy that inherits the new env var. `/health` prefers `DEPLOY_COMMIT_SHA`
+  # over `RAILWAY_GIT_COMMIT_SHA`, guaranteeing the polling works regardless of
+  # what triggered the deploy.
+  #
+  # Also addresses BLU-17's AC gap (no `deploy-staging.yml`) — this job is the
+  # CI-owned deploy step for workers-staging that was missing.
+  # ---------------------------------------------------------------------------
+  deploy-workers-staging:
+    name: deploy-workers-staging
+    needs: verify
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    timeout-minutes: 10
+
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli@4
+
+      - name: Set DEPLOY_COMMIT_SHA (triggers Railway redeploy)
+        # Setting a var without `--skip-deploys` triggers Railway to redeploy
+        # the service, picking up the new env var. The redeploy builds from
+        # the currently linked branch (main) — so the new workers binary has
+        # both (a) latest main code and (b) DEPLOY_COMMIT_SHA=<this commit>
+        # baked into its runtime env.
+        run: |
+          railway variable set "DEPLOY_COMMIT_SHA=${GITHUB_SHA}" \
+            --service @workers-staging --environment staging
+
+  # ---------------------------------------------------------------------------
   # BLU-36: after a green `verify` on main, auto-sync the Inngest Cloud app.
   #
-  # Railway deploys workers-staging independently on every push to main (via
-  # its GitHub integration). Without this job, Inngest Cloud's function
-  # registry stays stale — new functions (orchestrator.route, agent.concierge.run,
-  # action.gate, …) land on the workers endpoint but Inngest doesn't know to
-  # invoke them until someone clicks "Sync" in the Dashboard.
+  # Depends on `deploy-workers-staging` so Railway has been told about the new
+  # commit SHA before we start polling. Without this job, Inngest Cloud's
+  # function registry stays stale — new functions (orchestrator.route,
+  # agent.concierge.run, action.gate, …) land on the workers endpoint but
+  # Inngest doesn't know to invoke them until someone clicks "Sync" in the
+  # Dashboard.
   #
   # Mechanism: `PUT /api/inngest` on the Inngest `serve()` handler tells it
   # to push its current function manifest to Inngest Cloud. Auth between the
@@ -135,7 +179,7 @@ jobs:
   # ---------------------------------------------------------------------------
   sync-inngest-staging:
     name: sync-inngest-staging
-    needs: verify
+    needs: deploy-workers-staging
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     timeout-minutes: 10
