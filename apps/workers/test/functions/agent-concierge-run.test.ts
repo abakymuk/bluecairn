@@ -40,7 +40,9 @@ vi.mock('@langfuse/tracing', () => ({
   getActiveSpanId: vi.fn().mockReturnValue('test-span-id'),
 }))
 
-const { handleAgentConciergeRun } = await import('../../src/functions/agent-concierge-run.js')
+const { handleAgentConciergeRun, handleAgentConciergeRunFailure } = await import(
+  '../../src/functions/agent-concierge-run.js'
+)
 
 const admin = postgres(adminUrl, { max: 1, prepare: false })
 const db = createDatabase(adminUrl)
@@ -312,7 +314,11 @@ describe('handleAgentConciergeRun', () => {
     expect((firstPayload as { id: string }).id).toBe((secondPayload as { id: string }).id)
   })
 
-  test('LLM failure (BLU-34): run marked failed + audit_log written + handler rethrows', async () => {
+  test('LLM failure (BLU-34 v2): handler throws with [step=generate-ack] tag, run stays running', async () => {
+    // Handler lets step errors bubble unchanged. `agent_runs` MUST stay
+    // 'running' until Inngest exhausts retries and fires onFailure —
+    // otherwise a transient `rate_limit` that would retry successfully
+    // would still leave the run terminally failed on first attempt.
     mockGenerateText.mockResolvedValueOnce({
       ok: false as const,
       error: { kind: 'rate_limit' as const, message: '429 too many requests' },
@@ -321,7 +327,7 @@ describe('handleAgentConciergeRun', () => {
     const ev = makeEvent()
     await expect(
       handleAgentConciergeRun({ event: ev, step: fakeStep, dbOverride: db }),
-    ).rejects.toThrow(/concierge LLM failed/)
+    ).rejects.toThrow(/\[step=generate-ack\].*\[kind=rate_limit\].*concierge LLM failed/)
 
     // No actions row — handler threw before insert-action step.
     const actions = await admin<{ id: string }[]>`
@@ -329,7 +335,54 @@ describe('handleAgentConciergeRun', () => {
     `
     expect(actions).toHaveLength(0)
 
-    // BLU-34: agent_run transitioned to 'failed' with error details on output.
+    // BLU-34 v2 critical invariant: on transient failure (pre-onFailure
+    // state), agent_runs MUST stay 'running' so a successful Inngest
+    // retry can complete it normally.
+    const [run] = await admin<{ status: string }[]>`
+      SELECT status FROM agent_runs WHERE id = ${runId}
+    `
+    expect(run?.status).toBe('running')
+
+    // No audit_log row yet — the run-failed audit only lands when
+    // Inngest fires onFailure (tested separately below).
+    const audits = await admin<{ id: string }[]>`
+      SELECT id FROM audit_log
+      WHERE agent_run_id = ${runId}
+      AND event_kind = 'agent.run_failed'
+      AND event_payload->>'correlation_id' = ${ev.data.correlation_id}
+    `
+    expect(audits).toHaveLength(0)
+
+    // No action.requested emitted on failure.
+    expect(fakeStep.sendEvent).not.toHaveBeenCalled()
+  })
+
+  test('onFailure (BLU-34 v2): marks run failed + writes agent.run_failed audit row', async () => {
+    // Simulates Inngest firing onFailure after exhausting the retry
+    // budget. The failure handler is the only place that transitions
+    // agent_runs.status to 'failed'.
+    const correlationId = crypto.randomUUID()
+    const originalEventData = {
+      tenant_id: tenantId,
+      correlation_id: correlationId,
+      idempotency_key: `tg:${TEST_CHAT_ID}:onfail-${correlationId.slice(0, 4)}`,
+      run_id: runId,
+      agent_code: 'concierge',
+      thread_id: threadId,
+      message_id: messageId,
+    }
+    // Craft an error shaped like the handler's final thrown Error so the
+    // `[step=...]` + `[kind=...]` tags are present.
+    const finalError = new Error(
+      '[step=generate-ack] [kind=rate_limit] concierge LLM failed: rate_limit: 429 too many requests',
+    )
+
+    await handleAgentConciergeRunFailure({
+      event: { data: { event: { data: originalEventData } } },
+      error: finalError,
+      dbOverride: db,
+    })
+
     const [run] = await admin<{
       status: string
       output: { error_kind: string; error_message: string; failed_step: string } | null
@@ -340,12 +393,9 @@ describe('handleAgentConciergeRun', () => {
     expect(run?.status).toBe('failed')
     expect(run?.output?.error_kind).toBe('rate_limit')
     expect(run?.output?.failed_step).toBe('generate-ack')
-    expect(run?.output?.error_message).toMatch(/rate_limit/)
+    expect(run?.output?.error_message).toContain('concierge LLM failed')
     expect(run?.completed_at).not.toBeNull()
 
-    // BLU-34: audit_log has exactly one 'agent.run_failed' row for this call.
-    // Filter by correlation_id — audit_log is append-only (immutability
-    // trigger) so prior-test rows don't get wiped in afterEach.
     const audits = await admin<{
       event_kind: string
       event_summary: string
@@ -361,36 +411,42 @@ describe('handleAgentConciergeRun', () => {
       FROM audit_log
       WHERE agent_run_id = ${runId}
       AND event_kind = 'agent.run_failed'
-      AND event_payload->>'correlation_id' = ${ev.data.correlation_id}
+      AND event_payload->>'correlation_id' = ${correlationId}
     `
     expect(audits).toHaveLength(1)
-    expect(audits[0]?.event_kind).toBe('agent.run_failed')
     expect(audits[0]?.event_summary).toBe('agent run failed: rate_limit')
-    expect(audits[0]?.event_payload?.agent_code).toBe('concierge')
     expect(audits[0]?.event_payload?.failed_step).toBe('generate-ack')
     expect(audits[0]?.event_payload?.error_kind).toBe('rate_limit')
-
-    // No action.requested emitted on failure.
-    expect(fakeStep.sendEvent).not.toHaveBeenCalled()
   })
 
-  test('LLM failure retry idempotency (BLU-34): retry on same event → no additional audit row', async () => {
-    // Same event payload both times mirrors Inngest's retry model (same
-    // correlation_id, same run_id). markRunFailed's guarded UPDATE zero-
-    // rows on the second attempt (status already 'failed'), skipping the
-    // audit insert — so exactly one audit row per correlation_id.
-    mockGenerateText.mockResolvedValue({
-      ok: false as const,
-      error: { kind: 'rate_limit' as const, message: '429 too many requests' },
-    })
+  test('onFailure idempotency (BLU-34 v2): two invocations for same run → one audit row', async () => {
+    // Defensive: even though Inngest is supposed to fire onFailure once
+    // per exhausted retry budget, the guarded UPDATE in markRunFailed
+    // zero-rows on a terminal run and skips the second audit insert.
+    const correlationId = crypto.randomUUID()
+    const originalEventData = {
+      tenant_id: tenantId,
+      correlation_id: correlationId,
+      idempotency_key: `tg:${TEST_CHAT_ID}:twice-${correlationId.slice(0, 4)}`,
+      run_id: runId,
+      agent_code: 'concierge',
+      thread_id: threadId,
+      message_id: messageId,
+    }
+    const finalError = new Error(
+      '[step=load-run-context] agent_run missing during replay',
+    )
 
-    const ev = makeEvent()
-    await expect(
-      handleAgentConciergeRun({ event: ev, step: fakeStep, dbOverride: db }),
-    ).rejects.toThrow(/concierge LLM failed/)
-    await expect(
-      handleAgentConciergeRun({ event: ev, step: fakeStep, dbOverride: db }),
-    ).rejects.toThrow(/concierge LLM failed/)
+    await handleAgentConciergeRunFailure({
+      event: { data: { event: { data: originalEventData } } },
+      error: finalError,
+      dbOverride: db,
+    })
+    await handleAgentConciergeRunFailure({
+      event: { data: { event: { data: originalEventData } } },
+      error: finalError,
+      dbOverride: db,
+    })
 
     const [run] = await admin<{ status: string }[]>`
       SELECT status FROM agent_runs WHERE id = ${runId}
@@ -401,8 +457,41 @@ describe('handleAgentConciergeRun', () => {
       SELECT id FROM audit_log
       WHERE agent_run_id = ${runId}
       AND event_kind = 'agent.run_failed'
-      AND event_payload->>'correlation_id' = ${ev.data.correlation_id}
+      AND event_payload->>'correlation_id' = ${correlationId}
     `
     expect(audits).toHaveLength(1)
+  })
+
+  test('onFailure: unknown error (no [step=...] tag) → failed_step="unknown"', async () => {
+    // An error thrown outside our wrapStepError conventions (e.g. a
+    // framework-level failure) still transitions the run to failed.
+    // failed_step defaults to 'unknown'.
+    const correlationId = crypto.randomUUID()
+    const originalEventData = {
+      tenant_id: tenantId,
+      correlation_id: correlationId,
+      idempotency_key: `tg:${TEST_CHAT_ID}:unk-${correlationId.slice(0, 4)}`,
+      run_id: runId,
+      agent_code: 'concierge',
+      thread_id: threadId,
+      message_id: messageId,
+    }
+    const finalError = new Error('unexpected upstream connection reset')
+
+    await handleAgentConciergeRunFailure({
+      event: { data: { event: { data: originalEventData } } },
+      error: finalError,
+      dbOverride: db,
+    })
+
+    const [run] = await admin<{
+      status: string
+      output: { error_kind: string; failed_step: string } | null
+    }[]>`
+      SELECT status, output FROM agent_runs WHERE id = ${runId}
+    `
+    expect(run?.status).toBe('failed')
+    expect(run?.output?.failed_step).toBe('unknown')
+    expect(run?.output?.error_kind).toBe('unknown')
   })
 })

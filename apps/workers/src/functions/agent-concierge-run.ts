@@ -14,54 +14,104 @@ import { inngest } from '../inngest.js'
 import { logger } from '../lib/logger.js'
 
 /**
- * BLU-34 failure helper.
+ * BLU-34 failure semantics (post-review fix for PR #37):
  *
- * Called when any `step.run` in the concierge flow (load-run-context,
- * generate-ack, insert-action, finalize-agent-run) throws after Inngest
- * has exhausted its retries. Performs two writes in a single tenant-
- * scoped tx:
+ * Inngest retries the *function*, not individual `step.run` callbacks —
+ * when a step callback throws, the throw bubbles out of the handler, the
+ * function attempt fails, and Inngest schedules a fresh invocation.
+ * Checkpointed steps replay their cached results; the failed step re-
+ * runs. Only after ALL retries are exhausted does Inngest fire the
+ * function's `onFailure` handler.
  *
- *   1. Guarded UPDATE on `agent_runs` — `status='failed'` + terminal
- *      `completed_at` + `output` body carrying error kind / message /
- *      failed step. The WHERE clause requires `status='running'`, so a
- *      second invocation (retry, re-run) is a no-op that returns zero
- *      rows and skips the audit insert. That's the idempotency hook.
- *   2. INSERT on `audit_log` — `event_kind='agent.run_failed'`, linked to
- *      the `agent_run_id`, payload carries agent_code / failed_step /
- *      error_kind / error_message. Only runs when step 1 actually
- *      transitioned the row (skipped when UPDATE zero-rowed).
+ * PR #37 v1 wrote `agent_runs.status = 'failed'` from a per-step catch,
+ * which fired on the *first* attempt — so a transient `rate_limit` that
+ * Inngest would have successfully retried still flipped the row to
+ * `failed` before the retry had a chance to succeed. v2 (this file)
+ * moves the failure write to a dedicated `handleAgentConciergeRunFailure`
+ * bound to the Inngest function's `onFailure` option. The main handler
+ * lets step errors bubble unchanged; the failure handler fires exactly
+ * once per exhausted-retry budget with the final error.
  *
- * Best-effort: if the tx itself fails (DB outage mid-failure-handling),
- * we log and swallow. The original step error is the real signal; we
- * must not mask it with an audit-path error.
+ * Step identity survives serialization via a `[step=<name>]` prefix on
+ * every thrown error message — see `wrapStepError` below. `[kind=<k>]` is
+ * also embedded for LLM-origin throws so the discriminated `LlmError.kind`
+ * reaches the audit log even after jsonErrorSchema drops non-standard
+ * Error properties.
+ */
+
+export type ConciergeFailedStep =
+  | 'load-run-context'
+  | 'generate-ack'
+  | 'insert-action'
+  | 'finalize-agent-run'
+  | 'unknown'
+
+const FAILED_STEPS: readonly ConciergeFailedStep[] = [
+  'load-run-context',
+  'generate-ack',
+  'insert-action',
+  'finalize-agent-run',
+]
+
+/**
+ * Tag an error with `[step=<name>]` and optional `[kind=<k>]` so both
+ * pieces survive the jsonErrorSchema serialization boundary on the way
+ * to `onFailure`. Callers throw the returned Error directly.
+ */
+const wrapStepError = (
+  step: ConciergeFailedStep,
+  message: string,
+  opts: { kind?: string } = {},
+): Error => {
+  const kindTag = opts.kind !== undefined ? `[kind=${opts.kind}] ` : ''
+  return new Error(`[step=${step}] ${kindTag}${message}`)
+}
+
+/** Pull the `[step=<name>]` tag from an error message; defaults to 'unknown'. */
+export const parseFailedStep = (err: unknown): ConciergeFailedStep => {
+  if (!(err instanceof Error)) return 'unknown'
+  const m = err.message.match(/^\[step=([a-z-]+)\]/)
+  if (m === null) return 'unknown'
+  const tagged = m[1]
+  if (FAILED_STEPS.includes(tagged as ConciergeFailedStep)) {
+    return tagged as ConciergeFailedStep
+  }
+  return 'unknown'
+}
+
+/** Pull the `[kind=<k>]` tag (LLM-origin only); defaults to 'unknown'. */
+const parseErrorKind = (err: unknown): string => {
+  if (!(err instanceof Error)) return 'unknown'
+  const m = err.message.match(/\[kind=([a-z_]+)\]/)
+  return m?.[1] ?? 'unknown'
+}
+
+const extractErrorMessage = (err: unknown): string =>
+  err instanceof Error ? err.message : String(err)
+
+/**
+ * Write the terminal `failed` state for a run — guarded UPDATE + audit
+ * row in one tenant-scoped tx. Called exclusively from the `onFailure`
+ * path (see `handleAgentConciergeRunFailure` below).
  *
- * The handler is responsible for rethrowing the original error AFTER
- * this helper returns — this function does not rethrow on its own.
+ * Guarded UPDATE (`WHERE status = 'running'`) keeps the helper
+ * idempotent under any future double-invocation of onFailure; best-
+ * effort tx means an audit-path DB outage is logged and swallowed — the
+ * original error is already surfaced through Inngest's function-level
+ * failure path, so we never mask it.
  */
 interface MarkRunFailedArgs {
   dbToUse: Database
   tenantId: string
   correlationId: string
   runId: string
-  failedStep: 'load-run-context' | 'generate-ack' | 'insert-action' | 'finalize-agent-run'
-  error: unknown
+  failedStep: ConciergeFailedStep
+  errorKind: string
+  errorMessage: string
 }
-
-const extractErrorKind = (err: unknown): string => {
-  if (typeof err === 'object' && err !== null && 'kind' in err) {
-    const k = (err as { kind: unknown }).kind
-    if (typeof k === 'string') return k
-  }
-  return 'unknown'
-}
-
-const extractErrorMessage = (err: unknown): string =>
-  err instanceof Error ? err.message : String(err)
 
 const markRunFailed = async (args: MarkRunFailedArgs): Promise<void> => {
-  const { dbToUse, tenantId, correlationId, runId, failedStep, error } = args
-  const errorKind = extractErrorKind(error)
-  const errorMessage = extractErrorMessage(error)
+  const { dbToUse, tenantId, correlationId, runId, failedStep, errorKind, errorMessage } = args
   try {
     const ctx = newTenantContext({
       tenantId: TenantId(tenantId),
@@ -83,9 +133,8 @@ const markRunFailed = async (args: MarkRunFailedArgs): Promise<void> => {
         .returning({ id: schema.agentRuns.id })
 
       if (updated.length === 0) {
-        // Row already in terminal state — this is a retry. Skip the audit
-        // insert so we end up with exactly one `agent.run_failed` row per
-        // run_id, not one per Inngest retry attempt.
+        // Row already in terminal state — defensive no-op in case the
+        // onFailure handler ever re-fires for the same run.
         return
       }
 
@@ -104,8 +153,6 @@ const markRunFailed = async (args: MarkRunFailedArgs): Promise<void> => {
       })
     })
   } catch (auditErr) {
-    // Don't mask the original failure. Log and continue; the handler
-    // rethrows the original error after we return.
     logger.error('markRunFailed: failure-path write failed', {
       tenantId,
       correlationId,
@@ -184,19 +231,21 @@ export const handleAgentConciergeRun = async (args: {
       })
 
       // Step 1: load agent_run + prompt content + latest message text.
-      // Wrapped with BLU-34 failure path — if Inngest exhausts retries, we
-      // mark the already-inserted agent_runs row as `failed`, write an
-      // `agent.run_failed` audit row under tenant context, and rethrow so
-      // Inngest marks the function failed.
+      // BLU-34: step errors propagate to Inngest unchanged. The
+      // function's `onFailure` handler (wired below at createFunction)
+      // marks the run `failed` and writes the audit row AFTER retries
+      // are exhausted — only then is the failure truly terminal. Each
+      // thrown error carries `[step=<name>]` so the failure handler can
+      // tag the audit row with the step that exhausted.
       interface PreloadResult {
         promptContent: string
         promptVersion: number
         messageText: string
         threadId: string
       }
-      let preload: PreloadResult
-      try {
-        preload = await step.run('load-run-context', async (): Promise<PreloadResult> => {
+      const preload = await step.run(
+        'load-run-context',
+        async (): Promise<PreloadResult> => {
           const ctx = newTenantContext({
             tenantId: TenantId(tenant_id),
             correlationId: correlation_id,
@@ -212,7 +261,8 @@ export const handleAgentConciergeRun = async (args: {
               .where(eq(schema.agentRuns.id, run_id))
               .limit(1)
             if (run === undefined) {
-              throw new Error(
+              throw wrapStepError(
+                'load-run-context',
                 `agent_run ${run_id} not found (orchestrator + concierge out of sync)`,
               )
             }
@@ -223,7 +273,10 @@ export const handleAgentConciergeRun = async (args: {
               .where(eq(schema.prompts.id, run.promptId))
               .limit(1)
             if (prompt === undefined) {
-              throw new Error(`prompt ${run.promptId} not found for concierge run ${run_id}`)
+              throw wrapStepError(
+                'load-run-context',
+                `prompt ${run.promptId} not found for concierge run ${run_id}`,
+              )
             }
 
             const [msg] = await tx
@@ -235,7 +288,10 @@ export const handleAgentConciergeRun = async (args: {
               .where(eq(schema.messages.id, message_id))
               .limit(1)
             if (msg === undefined) {
-              throw new Error(`trigger message ${message_id} not found`)
+              throw wrapStepError(
+                'load-run-context',
+                `trigger message ${message_id} not found`,
+              )
             }
 
             return {
@@ -245,25 +301,14 @@ export const handleAgentConciergeRun = async (args: {
               threadId: run.threadId ?? thread_id,
             }
           })
-        })
-      } catch (err) {
-        await markRunFailed({
-          dbToUse,
-          tenantId: tenant_id,
-          correlationId: correlation_id,
-          runId: run_id,
-          failedStep: 'load-run-context',
-          error: err,
-        })
-        throw err
-      }
+        },
+      )
 
       // Step 2: call Haiku. generateText (BLU-20 wrapper) opens an
-      // `llm.concierge` child span automatically. BLU-34: same guarded-
-      // failure semantics as step 1.
-      let llm: LlmCallOutput
-      try {
-        llm = await step.run('generate-ack', async (): Promise<LlmCallOutput> => {
+      // `llm.concierge` child span automatically.
+      const llm: LlmCallOutput = await step.run(
+        'generate-ack',
+        async (): Promise<LlmCallOutput> => {
           const result = await generateText({
             model: anthropic(CONCIERGE_MODEL),
             system: preload.promptContent,
@@ -277,127 +322,88 @@ export const handleAgentConciergeRun = async (args: {
             },
           })
           if (!result.ok) {
-            // Attach the LlmError kind so markRunFailed can persist a
-            // discriminated error_kind rather than the catch-all 'unknown'.
-            const err = new Error(
+            // `[kind=<k>]` embeds the discriminated LlmError.kind in the
+            // message so it survives jsonErrorSchema on the way to the
+            // onFailure handler — non-standard Error properties don't.
+            throw wrapStepError(
+              'generate-ack',
               `concierge LLM failed: ${result.error.kind}: ${result.error.message}`,
+              { kind: result.error.kind },
             )
-            ;(err as Error & { kind: string }).kind = result.error.kind
-            throw err
           }
           return result.value
-        })
-      } catch (err) {
-        await markRunFailed({
-          dbToUse,
-          tenantId: tenant_id,
-          correlationId: correlation_id,
-          runId: run_id,
-          failedStep: 'generate-ack',
-          error: err,
-        })
-        throw err
-      }
+        },
+      )
 
       // Step 3: insert actions row (idempotent on agent_run_id + kind).
-      // BLU-34: guarded failure path — if the DB insert fails after retries,
-      // markRunFailed records the state before we rethrow.
-      let actionId: string
-      try {
-        actionId = await step.run('insert-action', async () => {
-          const ctx = newTenantContext({
-            tenantId: TenantId(tenant_id),
-            correlationId: correlation_id,
-          })
-          return await withTenant(dbToUse, ctx, async (tx) => {
-            const [existing] = await tx
-              .select({ id: schema.actions.id })
-              .from(schema.actions)
-              .where(
-                and(
-                  eq(schema.actions.tenantId, tenant_id),
-                  eq(schema.actions.agentRunId, run_id),
-                  eq(schema.actions.kind, 'send_message'),
-                ),
-              )
-              .limit(1)
-            if (existing !== undefined) {
-              return existing.id
-            }
-            const [inserted] = await tx
-              .insert(schema.actions)
-              .values({
-                tenantId: tenant_id,
-                agentRunId: run_id,
-                kind: 'send_message',
-                payload: {
-                  thread_id: preload.threadId,
-                  text: llm.text,
-                },
-                policyOutcome: 'approval_required',
-                status: 'pending',
-              })
-              .returning({ id: schema.actions.id })
-            if (inserted === undefined) {
-              throw new Error('actions insert returned no row')
-            }
-            return inserted.id
-          })
-        })
-      } catch (err) {
-        await markRunFailed({
-          dbToUse,
-          tenantId: tenant_id,
+      const actionId = await step.run('insert-action', async () => {
+        const ctx = newTenantContext({
+          tenantId: TenantId(tenant_id),
           correlationId: correlation_id,
-          runId: run_id,
-          failedStep: 'insert-action',
-          error: err,
         })
-        throw err
-      }
+        return await withTenant(dbToUse, ctx, async (tx) => {
+          const [existing] = await tx
+            .select({ id: schema.actions.id })
+            .from(schema.actions)
+            .where(
+              and(
+                eq(schema.actions.tenantId, tenant_id),
+                eq(schema.actions.agentRunId, run_id),
+                eq(schema.actions.kind, 'send_message'),
+              ),
+            )
+            .limit(1)
+          if (existing !== undefined) {
+            return existing.id
+          }
+          const [inserted] = await tx
+            .insert(schema.actions)
+            .values({
+              tenantId: tenant_id,
+              agentRunId: run_id,
+              kind: 'send_message',
+              payload: {
+                thread_id: preload.threadId,
+                text: llm.text,
+              },
+              policyOutcome: 'approval_required',
+              status: 'pending',
+            })
+            .returning({ id: schema.actions.id })
+          if (inserted === undefined) {
+            throw wrapStepError('insert-action', 'actions insert returned no row')
+          }
+          return inserted.id
+        })
+      })
 
-      // Step 4: finalize agent_run. BLU-34: wrapped with the same
-      // guarded failure path even though this step IS the terminal
-      // state transition — a DB failure mid-finalize leaves the row
-      // in 'running' forever otherwise.
-      try {
-        await step.run('finalize-agent-run', async () => {
-          const ctx = newTenantContext({
-            tenantId: TenantId(tenant_id),
-            correlationId: correlation_id,
-          })
-          const latencyMs = Date.now() - start
-          await withTenant(dbToUse, ctx, async (tx) => {
-            await tx
-              .update(schema.agentRuns)
-              .set({
-                status: 'completed',
-                output: {
-                  reply_text: llm.text,
-                  action_id: actionId,
-                  classifier_context_used: true,
-                },
-                inputTokens: llm.tokens.input,
-                outputTokens: llm.tokens.output,
-                costCents: Math.round(llm.costUsd * 100),
-                latencyMs,
-                completedAt: new Date(),
-                ...(llm.langfuseTraceId !== '' && { langfuseTraceId: llm.langfuseTraceId }),
-              })
-              .where(eq(schema.agentRuns.id, run_id))
-          })
-        })
-      } catch (err) {
-        await markRunFailed({
-          dbToUse,
-          tenantId: tenant_id,
+      // Step 4: finalize agent_run.
+      await step.run('finalize-agent-run', async () => {
+        const ctx = newTenantContext({
+          tenantId: TenantId(tenant_id),
           correlationId: correlation_id,
-          runId: run_id,
-          failedStep: 'finalize-agent-run',
-          error: err,
         })
-        throw err
-      }
+        const latencyMs = Date.now() - start
+        await withTenant(dbToUse, ctx, async (tx) => {
+          await tx
+            .update(schema.agentRuns)
+            .set({
+              status: 'completed',
+              output: {
+                reply_text: llm.text,
+                action_id: actionId,
+                classifier_context_used: true,
+              },
+              inputTokens: llm.tokens.input,
+              outputTokens: llm.tokens.output,
+              costCents: Math.round(llm.costUsd * 100),
+              latencyMs,
+              completedAt: new Date(),
+              ...(llm.langfuseTraceId !== '' && { langfuseTraceId: llm.langfuseTraceId }),
+            })
+            .where(eq(schema.agentRuns.id, run_id))
+        })
+      })
 
       // Step 5: hand off to the approval gate (BLU-25).
       await step.sendEvent('request-action', {
@@ -451,6 +457,64 @@ export const handleAgentConciergeRun = async (args: {
   )
 }
 
+/**
+ * onFailure handler (BLU-34 v2, post-PR-#37 review).
+ *
+ * Inngest fires this AFTER the function's retry budget is exhausted —
+ * which is exactly when we can honestly say the run is terminally
+ * failed. Transient step errors that Inngest retries successfully
+ * never reach here, so `agent_runs` never prematurely flips to
+ * `failed`.
+ *
+ * The original event (with AgentRunRequestedData shape) is nested on
+ * `event.data.event` inside Inngest's synthetic `inngest/function.failed`
+ * payload. The final error is `error: Error`; jsonErrorSchema drops
+ * non-standard properties, so we recover `step` + `kind` by parsing the
+ * `[step=<name>] [kind=<k>]` tags `wrapStepError` embedded in the
+ * message.
+ *
+ * Exported for integration testing — the Inngest binding below calls
+ * this with the real runtime DB; tests pass `dbOverride`.
+ */
+export interface ConciergeFailureEvent {
+  data: {
+    event: { data: AgentRunRequestedData }
+  }
+}
+
+export const handleAgentConciergeRunFailure = async (args: {
+  event: ConciergeFailureEvent
+  error: Error
+  dbOverride?: Database
+}): Promise<void> => {
+  const { event, error, dbOverride } = args
+  const dbToUse = dbOverride ?? db
+  const originalData = event.data.event.data
+  const { tenant_id, run_id, correlation_id } = originalData
+  const failedStep = parseFailedStep(error)
+  const errorKind = parseErrorKind(error)
+  const errorMessage = extractErrorMessage(error)
+
+  logger.warn('concierge run failed (onFailure fired after retries exhausted)', {
+    tenantId: tenant_id,
+    correlationId: correlation_id,
+    runId: run_id,
+    failedStep,
+    errorKind,
+    errorMessage,
+  })
+
+  await markRunFailed({
+    dbToUse,
+    tenantId: tenant_id,
+    correlationId: correlation_id,
+    runId: run_id,
+    failedStep,
+    errorKind,
+    errorMessage,
+  })
+}
+
 // Inngest wiring — Inngest's `if` filter short-circuits so the function
 // is only invoked for concierge-bound events. When Sofia ships (M2) she'll
 // register her own function with `agent_code == "vendor_ops"`.
@@ -458,6 +522,11 @@ export const agentConciergeRun = inngest.createFunction(
   {
     id: 'agent-concierge-run',
     name: 'Agent: Concierge run',
+    onFailure: async ({ event, error }) =>
+      handleAgentConciergeRunFailure({
+        event: event as unknown as ConciergeFailureEvent,
+        error,
+      }),
   },
   {
     event: 'agent.run.requested',
