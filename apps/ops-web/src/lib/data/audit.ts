@@ -1,5 +1,5 @@
 import { schema } from '@bluecairn/db'
-import { db } from '@/lib/db'
+import { dbAdmin as db } from '@/lib/db-admin'
 
 /**
  * Write an `ops_web_read` row to `audit_log` (BLU-27 AC#4).

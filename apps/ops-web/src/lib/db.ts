@@ -2,14 +2,15 @@ import { createDatabase, type Database } from '@bluecairn/db'
 import { env } from '@/env'
 
 /**
- * Shared Drizzle database instance for ops-web server code.
+ * App-role Drizzle client (`bluecairn_app`, RLS-subject).
  *
- * Uses the RLS-subject role (`DATABASE_URL` / `bluecairn_app`) — every
- * tenant-scoped query must flow through `withTenant(db, ctx, ...)`.
- * For platform-global reads (auth_*, agent_definitions, tenants) this
- * same client works since those tables have RLS OFF.
+ * Used by Better Auth's Drizzle adapter — the `auth_*` tables are
+ * platform-global (RLS OFF), so the app role works cleanly and
+ * keeps the admin-role blast radius small.
  *
- * Better Auth's drizzle adapter uses this instance to manage its own
- * `auth_*` tables (see `./auth.ts`).
+ * For ops-pod data queries that span tenants (threads, messages,
+ * agent_runs, audit_log), use `./db-admin.ts` instead — ops-pod is
+ * cross-tenant by design and RLS on the app role would filter
+ * results to a single tenant.
  */
 export const db: Database = createDatabase(env.DATABASE_URL)
