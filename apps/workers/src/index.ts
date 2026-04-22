@@ -89,12 +89,14 @@ logger.info('workers starting', { port: env.PORT, env: env.NODE_ENV })
 // next-event-triggered sync.
 //
 // Retry loop (not a fixed setTimeout): on a cold Railway container the Inngest
-// `serve()` handler can return 4xx for the first few seconds after module load
-// even though the Hono listener is up. Retry on both 4xx and network errors
-// until we see a 2xx or exhaust the budget.
+// `serve()` handler keeps returning 400 until Railway's public router begins
+// forwarding to the new deployment — Inngest Cloud's PUT-time verification
+// callback to our public URL fails otherwise. Observed window on staging
+// (deploy dfb815a): >30s, <70s. 90s budget covers it with margin; if this
+// ever isn't enough, escalate to polling the public /health before sync.
 async function selfSyncInngest(): Promise<void> {
   const url = `http://localhost:${env.PORT}/api/inngest`
-  const maxAttempts = 10
+  const maxAttempts = 30
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const r = await fetch(url, { method: 'PUT' })
