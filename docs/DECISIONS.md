@@ -99,6 +99,8 @@ Do not write an ADR for:
 | [0009](adr/0009-telegram-first-for-mvp.md) | Telegram-first for MVP | Accepted | 2026-04-22 |
 | [0010](adr/0010-langfuse-cloud-for-m0-m1.md) | Langfuse Cloud for M0/M1 | Accepted | 2026-04-22 |
 | [0011](adr/0011-minimal-in-repo-eval-runner.md) | Minimal in-repo eval runner for M2/M3 | Accepted | 2026-04-22 |
+| [0012](adr/0012-documents-mcp-transport.md) | Documents MCP transport | Accepted | 2026-04-22 |
+| [0013](adr/0013-memory-retrieval-policy.md) | Memory retrieval policy | Accepted | 2026-04-22 |
 
 ---
 
