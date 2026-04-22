@@ -160,6 +160,7 @@
       "dependencies": {
         "@bluecairn/agents": "workspace:*",
         "@bluecairn/core": "workspace:*",
+        "postgres": "^3.4.5",
       },
       "devDependencies": {
         "@types/bun": "^1.2.0",

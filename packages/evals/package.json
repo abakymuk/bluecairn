@@ -13,11 +13,13 @@
     "lint": "eslint src",
     "test": "echo 'stub package — no tests'",
     "eval": "echo 'stub package — no eval suites'",
+    "harness:m1": "bun run src/harness/m1-exit-gate.ts",
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {
     "@bluecairn/core": "workspace:*",
-    "@bluecairn/agents": "workspace:*"
+    "@bluecairn/agents": "workspace:*",
+    "postgres": "^3.4.5"
   },
   "devDependencies": {
     "@types/bun": "^1.2.0",
