@@ -88,11 +88,23 @@ export const runCase = async (args: RunCaseArgs): Promise<CaseResult> => {
 
   const output = llmResult.value.text
   const deterministic = runDeterministicChecks(output, evalCase.expected, runner.signoffPersona)
-  const judged = await runJudgeChecks(evalCase.input, output, evalCase.expected, {
+  const judge = await runJudgeChecks(evalCase.input, output, evalCase.expected, {
     metadata,
   })
-  const checks = [...deterministic, ...judged]
+  const checks = [...deterministic, ...judge.checks]
   const passed = checks.every((c) => c.passed)
+
+  // Combined token + cost totals (agent call + all successful judge calls).
+  // Judge calls whose underlying LLM wrapper failed contribute nothing to the
+  // usage accumulator — those failures surface as a failed check instead.
+  // See `runJudgeChecks` / `judgeBoolean` in `./judge.ts`.
+  const agentTokens = llmResult.value.tokens
+  const tokens = {
+    input: agentTokens.input + judge.tokens.input,
+    output: agentTokens.output + judge.tokens.output,
+    total: agentTokens.total + judge.tokens.total,
+  }
+  const costUsd = llmResult.value.costUsd + judge.costUsd
 
   return {
     caseId: evalCase.id,
@@ -104,8 +116,8 @@ export const runCase = async (args: RunCaseArgs): Promise<CaseResult> => {
     checks,
     passed,
     langfuseTraceId: llmResult.value.langfuseTraceId,
-    tokens: llmResult.value.tokens,
-    costUsd: llmResult.value.costUsd,
+    tokens,
+    costUsd,
   }
 }
 

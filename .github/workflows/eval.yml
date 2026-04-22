@@ -60,6 +60,13 @@ jobs:
       - name: Run eval (advisory — never blocks)
         id: eval
         continue-on-error: true
+        # Explicit ${PIPESTATUS[0]} below — don't rely on the GitHub default
+        # `bash -eo pipefail` because (a) we toggle `-e` off so the step can
+        # continue on runner failure and (b) a reviewer verified pipefail
+        # alone can still drop the runner's exit when intermediate shell
+        # options differ between CI and local runs. Being explicit here is
+        # the only honest way to surface a failing suite in the advisory
+        # summary.
         run: |
           set +e
           AGENT="${{ github.event.inputs.agent || 'concierge' }}"
@@ -70,8 +77,8 @@ jobs:
             exit 0
           fi
           bun run --cwd packages/evals eval "${AGENT}" | tee eval-output.log
-          echo "EXIT_CODE=$?" >> "$GITHUB_OUTPUT"
-          set -e
+          RUNNER_EXIT=${PIPESTATUS[0]}
+          echo "EXIT_CODE=${RUNNER_EXIT}" >> "$GITHUB_OUTPUT"
 
       - name: Upload Markdown report
         if: steps.eval.outputs.SKIP != 'true'

@@ -14,7 +14,7 @@
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
-    "eval": "turbo run eval",
+    "eval": "bun run --cwd packages/evals eval",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "db:generate": "cd packages/db && bun --bun drizzle-kit generate",

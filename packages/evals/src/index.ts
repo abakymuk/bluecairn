@@ -15,7 +15,14 @@ export {
   runDeterministicChecks,
   type CheckResult,
 } from './runner/assertions.js'
-export { judgeBoolean, runJudgeChecks } from './runner/judge.js'
+export {
+  judgeBoolean,
+  runJudgeChecks,
+  type JudgeOutcome,
+  type JudgeBatchOutcome,
+  type JudgeRunOptions,
+  type TokenUsage,
+} from './runner/judge.js'
 export {
   getAgentRunner,
   listAgentCodes,
