@@ -92,6 +92,24 @@ describe('<TimelineItem /> — snapshots + explicit assertions', () => {
       expect(screen.queryByText(/sub-cent/i)).toBeNull()
     })
 
+    test('shows completed timestamp when present', () => {
+      render(<TimelineItem item={item} now={NOW} />)
+      // Label is visible; relative-time render handled by formatRelativeTime
+      // (already covered in format.test.ts).
+      expect(screen.getByText(/completed:/i)).toBeTruthy()
+    })
+
+    test('hides completed line when completedAt is null (running state)', () => {
+      const running: TimelineAgentRun = {
+        ...item,
+        id: 'run-4',
+        status: 'running',
+        completedAt: null,
+      }
+      render(<TimelineItem item={running} now={NOW} />)
+      expect(screen.queryByText(/completed:/i)).toBeNull()
+    })
+
     test('Langfuse link rendered when trace id present', () => {
       render(<TimelineItem item={item} now={NOW} />)
       const link = screen.getByRole('link', { name: /langfuse/i })
