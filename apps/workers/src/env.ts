@@ -39,11 +39,17 @@ const envSchema = z.object({
   // if the key is required and missing.
   ANTHROPIC_API_KEY: z.string().startsWith('sk-ant-').optional().catch(undefined),
 
-  // Railway injects these automatically on every deploy. We expose
+  // Railway injects these automatically on Git-triggered deploys. We expose
   // `deployedSha` via `/health` so BLU-36's sync-inngest-staging CI job can
   // confirm the new Inngest function manifest is actually live before
   // PUTting `/api/inngest`. `undefined` in local dev is fine — the health
   // route degrades to 'unknown'.
+  //
+  // BLU-36 follow-up: `RAILWAY_GIT_COMMIT_SHA` is NOT injected when the deploy
+  // is triggered by a non-Git event (Doppler live-sync, manual `railway up`,
+  // redeploy from dashboard). CI sets `DEPLOY_COMMIT_SHA` explicitly via
+  // `railway variable set` before each deploy, and `/health` prefers it.
+  DEPLOY_COMMIT_SHA: z.string().optional(),
   RAILWAY_GIT_COMMIT_SHA: z.string().optional(),
   RAILWAY_DEPLOYMENT_ID: z.string().optional(),
 })

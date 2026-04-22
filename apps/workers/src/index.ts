@@ -44,8 +44,11 @@ app.get('/health', (c) =>
     timestamp: new Date().toISOString(),
     // BLU-36: expose the live commit SHA so CI can wait for Railway to
     // actually rotate to the new deployment before triggering Inngest sync.
-    // Falls back to 'unknown' in local dev where Railway env is absent.
-    deployedSha: env.RAILWAY_GIT_COMMIT_SHA ?? 'unknown',
+    // Prefer `DEPLOY_COMMIT_SHA` (set explicitly by CI — always present) over
+    // `RAILWAY_GIT_COMMIT_SHA` (only set on Git-triggered deploys; absent when
+    // Doppler live-sync or manual redeploy fires the build). Falls back to
+    // 'unknown' in local dev where neither is set.
+    deployedSha: env.DEPLOY_COMMIT_SHA ?? env.RAILWAY_GIT_COMMIT_SHA ?? 'unknown',
     deploymentId: env.RAILWAY_DEPLOYMENT_ID ?? 'unknown',
   }),
 )
