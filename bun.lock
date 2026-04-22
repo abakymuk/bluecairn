@@ -157,6 +157,7 @@
         "@bluecairn/core": "workspace:*",
         "@bluecairn/db": "workspace:*",
         "@bluecairn/integrations": "workspace:*",
+        "@langfuse/tracing": "^4",
         "@modelcontextprotocol/sdk": "^1",
         "drizzle-orm": "^0.38.3",
         "grammy": "^1.42.0",

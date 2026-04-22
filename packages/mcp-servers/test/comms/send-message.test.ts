@@ -2,18 +2,51 @@ import type { Bot } from 'grammy'
 import postgres from 'postgres'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import { createDatabase } from '@bluecairn/db'
-import { sendMessage, type SendMessageDeps } from '../../src/comms/tools/send-message.js'
+import type { SendMessageDeps } from '../../src/comms/tools/send-message.js'
 
 /**
- * Integration test for Comms MCP send_message (BLU-21).
+ * Integration test for Comms MCP send_message (BLU-21, extended in BLU-33
+ * for Langfuse span assertions).
  *
  * - admin conn seeds a test tenant + channel + thread + prompt + agent_run.
  * - grammY Bot is mocked so tests don't hit Telegram.
- * - each test verifies DB rows written / not written.
+ * - `@langfuse/tracing` is mocked: `startActiveObservation` calls the
+ *   callback with a fake span whose `.update()` we capture. No real
+ *   OTel/Langfuse traffic — tests are hermetic on the tracing side.
+ * - DB rows are verified against a real Postgres (Neon dev via Doppler).
  *
  * Requires env: DATABASE_URL_ADMIN. Run via:
  *   doppler run --config dev -- bun run --cwd packages/mcp-servers test
  */
+
+// BLU-33: Langfuse tracing mock — `startActiveObservation` must call back
+// with a fake span so we can assert metadata/output writes without a real
+// OTel tracer. vi.hoisted runs before module resolution so vi.mock can
+// capture these stubs.
+const { mockStartActiveObservation, mockSpanUpdate } = vi.hoisted(() => ({
+  mockStartActiveObservation: vi.fn(),
+  mockSpanUpdate: vi.fn(),
+}))
+
+// Default implementation forwards the handler's callback + returns its
+// result so the real handler logic still runs under the mocked tracer.
+mockStartActiveObservation.mockImplementation(
+  async (
+    _name: string,
+    callback: (span: { update: typeof mockSpanUpdate; end: () => void }) => Promise<unknown>,
+  ) => {
+    const fakeSpan = { update: mockSpanUpdate, end: vi.fn() }
+    return callback(fakeSpan)
+  },
+)
+
+vi.mock('@langfuse/tracing', () => ({
+  startActiveObservation: mockStartActiveObservation,
+  getActiveTraceId: vi.fn().mockReturnValue('test-trace-id'),
+  getActiveSpanId: vi.fn().mockReturnValue('test-span-id'),
+}))
+
+const { sendMessage } = await import('../../src/comms/tools/send-message.js')
 
 const adminUrl = process.env.DATABASE_URL_ADMIN
 if (adminUrl === undefined) {
@@ -112,6 +145,8 @@ afterAll(async () => {
 
 beforeEach(() => {
   mockSendMessage.mockReset()
+  mockSpanUpdate.mockClear()
+  mockStartActiveObservation.mockClear()
 })
 
 afterEach(async () => {
@@ -175,6 +210,35 @@ describe('comms.send_message', () => {
     // tool_calls row that produced this message.
     expect(messages[0]?.direction).toBe('outbound')
     expect(messages[0]?.tool_call_id).toBe(result.value.toolCallId)
+
+    // BLU-33: handler wraps its body in `startActiveObservation` so the
+    // tool call shows up as a `tool.comms.send_message` span in Langfuse,
+    // nested under whatever trace the caller (orchestrator / agent run)
+    // opened. We mock the tracing lib to capture the span calls:
+    expect(mockStartActiveObservation).toHaveBeenCalledWith(
+      'tool.comms.send_message',
+      expect.any(Function),
+      { asType: 'tool' },
+    )
+    expect(mockSpanUpdate).toHaveBeenCalledTimes(2)
+    // First update: input + metadata seeded at entry
+    expect(mockSpanUpdate).toHaveBeenNthCalledWith(1, {
+      input: { thread_id: threadId },
+      metadata: expect.objectContaining({
+        tenant_id: tenantId,
+        thread_id: threadId,
+        agent_run_id: agentRunId,
+        idempotency_key: `${TEST_PREFIX}:hello`,
+      }),
+    })
+    // Second update: output set after handler returns
+    expect(mockSpanUpdate).toHaveBeenNthCalledWith(2, {
+      output: expect.objectContaining({
+        tool_call_id: result.value.toolCallId,
+        telegram_message_id: 4242,
+        cached: false,
+      }),
+    })
   })
 
   test('idempotent replay: second call returns cached, no Telegram re-send, no duplicate rows', async () => {
@@ -215,7 +279,7 @@ describe('comms.send_message', () => {
     expect(messages).toHaveLength(1)
   })
 
-  test('tenant mismatch: bogus tenantId for real thread → error, no rows, no Telegram call', async () => {
+  test('tenant mismatch: bogus tenantId for real thread → error, no rows, no Telegram call, error_kind on span', async () => {
     const bogusTenant = crypto.randomUUID()
 
     const result = await sendMessage(deps, {
@@ -237,6 +301,12 @@ describe('comms.send_message', () => {
       SELECT id FROM tool_calls WHERE tenant_id = ${tenantId} OR tenant_id = ${bogusTenant}
     `
     expect(toolCalls).toHaveLength(0)
+
+    // BLU-33: error path still wraps in a span and records error_kind
+    // for ops-web to surface/filter on.
+    expect(mockSpanUpdate).toHaveBeenLastCalledWith({
+      output: expect.objectContaining({ error_kind: 'tenant_mismatch' }),
+    })
   })
 
   test('thread not found: error, no Telegram call', async () => {
