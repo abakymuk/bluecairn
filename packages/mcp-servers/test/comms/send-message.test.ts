@@ -25,6 +25,9 @@ const db = createDatabase(adminUrl)
 
 const TEST_PREFIX = `blu21-test-${crypto.randomUUID().slice(0, 8)}`
 const TEST_CHAT_ID = `-100${Math.floor(Math.random() * 1e10)}`
+// Unique per run — avoid collision on `prompts.(agent_definition_id, version)`
+// unique index when re-running against a shared dev DB.
+const TEST_PROMPT_VERSION = 900_000 + Math.floor(Math.random() * 1_000_000)
 
 let tenantId: string
 let threadId: string
@@ -77,7 +80,7 @@ beforeAll(async () => {
 
   const [prompt] = await admin<{ id: string }[]>`
     INSERT INTO prompts (agent_definition_id, version, content, content_hash, activated_at)
-    VALUES (${agentDefId}, 1, 'test prompt', ${TEST_PREFIX}, now())
+    VALUES (${agentDefId}, ${TEST_PROMPT_VERSION}, 'test prompt', ${TEST_PREFIX}, now())
     RETURNING id
   `
   if (prompt === undefined) throw new Error('fixture: prompt')
@@ -154,12 +157,24 @@ describe('comms.send_message', () => {
     expect(toolCalls[0]?.status).toBe('success')
     expect(toolCalls[0]?.latency_ms).toBeGreaterThanOrEqual(0)
 
-    const messages = await admin<{ author_kind: string; external_message_id: string }[]>`
-      SELECT author_kind, external_message_id FROM messages WHERE tenant_id = ${tenantId}
+    const messages = await admin<
+      {
+        author_kind: string
+        external_message_id: string
+        direction: string
+        tool_call_id: string | null
+      }[]
+    >`
+      SELECT author_kind, external_message_id, direction, tool_call_id
+      FROM   messages WHERE tenant_id = ${tenantId}
     `
     expect(messages).toHaveLength(1)
     expect(messages[0]?.author_kind).toBe('agent')
     expect(messages[0]?.external_message_id).toBe('4242')
+    // BLU-32: explicit outbound direction + tool_call_id linkage to the
+    // tool_calls row that produced this message.
+    expect(messages[0]?.direction).toBe('outbound')
+    expect(messages[0]?.tool_call_id).toBe(result.value.toolCallId)
   })
 
   test('idempotent replay: second call returns cached, no Telegram re-send, no duplicate rows', async () => {
