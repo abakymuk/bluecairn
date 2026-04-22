@@ -42,6 +42,11 @@ app.get('/health', (c) =>
     service: 'workers',
     env: env.NODE_ENV,
     timestamp: new Date().toISOString(),
+    // BLU-36: expose the live commit SHA so CI can wait for Railway to
+    // actually rotate to the new deployment before triggering Inngest sync.
+    // Falls back to 'unknown' in local dev where Railway env is absent.
+    deployedSha: env.RAILWAY_GIT_COMMIT_SHA ?? 'unknown',
+    deploymentId: env.RAILWAY_DEPLOYMENT_ID ?? 'unknown',
   }),
 )
 

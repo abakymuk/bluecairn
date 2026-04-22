@@ -54,9 +54,41 @@ curl -X POST 'http://localhost:8288/e/dev' \
 - **Config path**: `apps/workers/railway.json` (the file in this directory).
 - **Build**: Nixpacks with `bun install --frozen-lockfile && bun run --cwd apps/workers build`.
 - **Start**: `bun run --cwd apps/workers start`.
-- **Healthcheck**: `GET /health`.
+- **Healthcheck**: `GET /health` — JSON includes `deployedSha` from Railway's
+  auto-injected `RAILWAY_GIT_COMMIT_SHA`. CI uses this to detect deploy completion.
 - **Secrets**: Doppler `stg` sync — requires `INNGEST_EVENT_KEY` + `INNGEST_SIGNING_KEY` from Inngest Cloud → staging environment.
 - **Inngest webhook**: once deployed, register the public URL (e.g. `https://workers-staging.up.railway.app/api/inngest`) in Inngest Cloud → Apps → `bluecairn` → staging environment. Inngest pings the URL; discovered functions appear in the dashboard.
+
+### Auto-sync Inngest Cloud after deploy (BLU-36)
+
+Each push to `main` that changes `apps/workers/src/functions/**` must be
+followed by an Inngest Cloud sync — otherwise the Dashboard keeps serving
+the previous function manifest and new events go unconsumed.
+
+This is automated in `.github/workflows/ci.yml` via the `sync-inngest-staging`
+job, which runs after `verify` passes on main:
+
+1. Polls `$WORKERS_URL/health` (5s intervals, 5min timeout) until
+   `deployedSha == github.sha` — guarantees Railway's rolling deploy has
+   rotated to the new revision before we sync.
+2. `curl -X PUT $WORKERS_URL/api/inngest --fail-with-body` — the Inngest
+   `serve()` handler reads its current function manifest and pushes it to
+   Inngest Cloud using the worker's `INNGEST_SIGNING_KEY`. Idempotent.
+
+No new secrets required — the workers URL is a public non-sensitive subdomain
+(stored as a workflow env, not a secret). Auth to Inngest Cloud uses the
+already-provisioned `INNGEST_SIGNING_KEY` on the workers side.
+
+If Railway regenerates the workers-staging subdomain (rare), update the
+`WORKERS_URL` env in `.github/workflows/ci.yml`.
+
+**Manual fallback** (if CI job fails or pre-BLU-36 branch): click "Sync" in
+[Inngest Dashboard](https://app.inngest.com) → staging env → Apps →
+`bluecairn-workers`. Or from any machine with the workers URL:
+
+```bash
+curl -X PUT https://workers-staging-staging-8181.up.railway.app/api/inngest --fail-with-body
+```
 
 Dogfood after deploy: fire `debug.ping` from the Inngest Cloud dashboard →
 expect a green `hello-world` run within a few seconds.

@@ -103,3 +103,62 @@ jobs:
 
       - name: Build
         run: bunx turbo build
+
+  # ---------------------------------------------------------------------------
+  # BLU-36: after a green `verify` on main, auto-sync the Inngest Cloud app.
+  #
+  # Railway deploys workers-staging independently on every push to main (via
+  # its GitHub integration). Without this job, Inngest Cloud's function
+  # registry stays stale — new functions (orchestrator.route, agent.concierge.run,
+  # action.gate, …) land on the workers endpoint but Inngest doesn't know to
+  # invoke them until someone clicks "Sync" in the Dashboard.
+  #
+  # Mechanism: `PUT /api/inngest` on the Inngest `serve()` handler tells it
+  # to push its current function manifest to Inngest Cloud. Auth between the
+  # handler and Inngest Cloud is via INNGEST_SIGNING_KEY (already provisioned
+  # on workers-staging via Doppler). We only need to trigger the PUT.
+  #
+  # Safety: we wait until `/health` reports a `deployedSha` that matches
+  # `github.sha` — so we don't sync the OLD deployment's manifest during a
+  # Railway rolling swap.
+  # ---------------------------------------------------------------------------
+  sync-inngest-staging:
+    name: sync-inngest-staging
+    needs: verify
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    timeout-minutes: 10
+
+    env:
+      WORKERS_URL: https://workers-staging-staging-8181.up.railway.app
+
+    steps:
+      - name: Wait for Railway to rotate to ${{ github.sha }}
+        run: |
+          EXPECTED="${GITHUB_SHA}"
+          echo "Waiting for workers-staging /health.deployedSha == ${EXPECTED:0:8}"
+          for i in $(seq 1 60); do  # 60 * 5s = 5 min max
+            # `|| true` keeps the loop going on transient curl errors
+            # (deploy window, DNS hiccup). `--max-time` bounds each probe.
+            RESP=$(curl -sfS --max-time 5 "$WORKERS_URL/health" || true)
+            SHA=$(echo "$RESP" | jq -r '.deployedSha // "unknown"' 2>/dev/null || echo "unknown")
+            if [ "$SHA" = "$EXPECTED" ]; then
+              echo "Workers at ${SHA:0:8} — new deployment is live"
+              exit 0
+            fi
+            echo "attempt $i/60 — current=${SHA:0:8} expected=${EXPECTED:0:8}"
+            sleep 5
+          done
+          echo "::error::Railway did not rotate to $EXPECTED within 5min; skipping Inngest sync to avoid registering stale manifest"
+          exit 1
+
+      - name: PUT /api/inngest to trigger function re-registration
+        # The Inngest `serve()` handler responds to PUT by reading its
+        # current function manifest and pushing it to Inngest Cloud using
+        # the worker's INNGEST_SIGNING_KEY. Idempotent — safe to re-run.
+        run: |
+          curl -X PUT "$WORKERS_URL/api/inngest" \
+            --fail-with-body \
+            --max-time 30 \
+            -H 'Accept: application/json' \
+            -w '\nhttp_code=%{http_code}\n'
