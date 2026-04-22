@@ -68,7 +68,15 @@
 import { parseArgs } from 'node:util'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import postgres, { type Sql } from 'postgres'
+
+// Resolve the reports dir relative to THIS file rather than `process.cwd()`.
+// When invoked via `bun run --cwd packages/evals harness:m1`, cwd is
+// already packages/evals, so the default `packages/evals/reports` doubled
+// the prefix. Using `__dirname`-style resolution removes the ambiguity.
+const HARNESS_DIR = dirname(fileURLToPath(import.meta.url))
+const DEFAULT_REPORT_DIR = resolve(HARNESS_DIR, '..', '..', 'reports')
 
 // ---------------------------------------------------------------------------
 // Section 1 — CLI + env + types
@@ -109,7 +117,7 @@ function parseHarnessArgs(): HarnessArgs {
       'workers-base-url': { type: 'string' },
       concurrency: { type: 'string', default: '1' },
       'auto-approve': { type: 'boolean', default: false },
-      'report-dir': { type: 'string', default: 'packages/evals/reports' },
+      'report-dir': { type: 'string' },
       'timeout-ms': { type: 'string', default: '60000' },
       'visible-p95-ms': { type: 'string', default: '10000' },
       'approval-prompt-p95-ms': { type: 'string', default: '20000' },
@@ -143,7 +151,7 @@ function parseHarnessArgs(): HarnessArgs {
     workersBaseUrl,
     concurrency: Number.parseInt(values.concurrency as string, 10),
     autoApprove: values['auto-approve'] === true,
-    reportDir: values['report-dir'] as string,
+    reportDir: (values['report-dir'] as string | undefined) ?? DEFAULT_REPORT_DIR,
     timeoutMs: Number.parseInt(values['timeout-ms'] as string, 10),
     visibleP95Ms: Number.parseInt(values['visible-p95-ms'] as string, 10),
     approvalPromptP95Ms: Number.parseInt(values['approval-prompt-p95-ms'] as string, 10),
