@@ -17,6 +17,8 @@
     "@bluecairn/core": "workspace:*",
     "@bluecairn/db": "workspace:*",
     "@bluecairn/agents": "workspace:*",
+    "@bluecairn/integrations": "workspace:*",
+    "@bluecairn/mcp-servers": "workspace:*",
     "@bluecairn/memory": "workspace:*",
     "@langfuse/tracing": "^4",
     "drizzle-orm": "^0.38.3",

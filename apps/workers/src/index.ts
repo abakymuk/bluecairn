@@ -2,6 +2,7 @@ import { initTracing } from '@bluecairn/agents'
 import { Hono } from 'hono'
 import { serve } from 'inngest/hono'
 import { env } from './env.js'
+import { actionGate } from './functions/action-gate.js'
 import { agentConciergeRun } from './functions/agent-concierge-run.js'
 import { helloWorld } from './functions/hello-world.js'
 import { orchestratorRoute } from './functions/orchestrator-route.js'
@@ -49,7 +50,7 @@ app.on(
   '/api/inngest',
   serve({
     client: inngest,
-    functions: [helloWorld, orchestratorRoute, agentConciergeRun],
+    functions: [helloWorld, orchestratorRoute, agentConciergeRun, actionGate],
   }),
 )
 
