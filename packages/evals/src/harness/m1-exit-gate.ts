@@ -163,7 +163,7 @@ function readEnv(): HarnessEnv {
   if (missing.length > 0) {
     throw new PreflightError(
       `missing required env: ${missing.join(', ')}\n` +
-        `  HARNESS_TELEGRAM_CHAT_ID = a REAL Telegram chat id (dedicated test chat, NOT the live internal thread) where approval prompts will land during the run. Provision once via Doppler stg; the harness creates/cleans its own tenant per-run.`,
+        `  HARNESS_TELEGRAM_CHAT_ID = a REAL Telegram chat id (dedicated test chat, NOT the live internal thread) where approval prompts will land during the run. Provision once via Doppler stg; the harness creates a persistent 'harness-exit-gate' tenant bound to this chat id (reused across runs).`,
     )
   }
   return {
@@ -216,8 +216,23 @@ async function preflight(args: HarnessArgs, _env: HarnessEnv): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Section 3 — Per-run tenant fixture
+// Section 3 — Stable harness-tenant fixture (create-or-reuse)
 // ---------------------------------------------------------------------------
+//
+// Originally we tried an ephemeral per-run tenant, but the append-only
+// `audit_log` trigger + FK-to-actions-without-cascade make tenant DELETE
+// fail after any pipeline run. That would leave the tenant stranded AND
+// block subsequent runs' preflight ("chat_id already bound").
+//
+// Stable design: ONE persistent tenant with slug `harness-exit-gate`,
+// ONE channel pointed at HARNESS_TELEGRAM_CHAT_ID, ONE thread. Runs
+// reuse them. Per-run isolation is achieved via unique `runId` tagged
+// into each synthetic message text (`[harness:<runId>] ping #N`). The
+// harness tenant NEVER shares a chat_id with a live tenant (preflight
+// enforces — if the chat_id is bound to anything but a slug starting
+// with `harness-exit-gate`, we refuse).
+
+const STABLE_HARNESS_SLUG = 'harness-exit-gate'
 
 interface HarnessFixture {
   tenantId: string
@@ -226,37 +241,74 @@ interface HarnessFixture {
   channelExternalId: string // = HARNESS_TELEGRAM_CHAT_ID
   threadId: string
   runId: string
+  reused: boolean
 }
 
 async function createFixture(args: {
   db: Sql
   harnessTelegramChatId: string
 }): Promise<HarnessFixture> {
-  const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
   const runId = crypto.randomUUID().slice(0, 8)
-  const tenantSlug = `harness-exit-gate-${ts}-${runId}`.toLowerCase()
 
+  // 1. Preflight: is the chat_id already bound to any channel?
+  const [clash] = await args.db<
+    { id: string; tenant_id: string; slug: string }[]
+  >`
+    SELECT c.id, c.tenant_id, t.slug
+    FROM   channels c
+    JOIN   tenants t ON t.id = c.tenant_id
+    WHERE  c.kind = 'telegram' AND c.external_id = ${args.harnessTelegramChatId}
+    LIMIT 1
+  `
+  if (clash && !clash.slug.startsWith(STABLE_HARNESS_SLUG)) {
+    throw new PreflightError(
+      `HARNESS_TELEGRAM_CHAT_ID ${args.harnessTelegramChatId} is already bound to tenant '${clash.slug}' (${clash.tenant_id}).\n` +
+        `  The harness refuses to hijack a live tenant's channel. Use a DEDICATED test chat that no live tenant owns.`,
+    )
+  }
+
+  // 2. Reuse existing harness tenant if present
+  if (clash) {
+    const [reusedThread] = await args.db<{ id: string }[]>`
+      SELECT id FROM threads WHERE channel_id = ${clash.id}
+      ORDER BY created_at ASC LIMIT 1
+    `
+    if (!reusedThread) {
+      // Channel exists but thread missing — create one to complete the fixture.
+      const [fresh] = await args.db<{ id: string }[]>`
+        INSERT INTO threads (tenant_id, channel_id, kind)
+        VALUES (${clash.tenant_id}, ${clash.id}, 'owner_primary')
+        RETURNING id
+      `
+      if (!fresh) throw new Error('fixture: thread insert returned no rows')
+      return {
+        tenantId: clash.tenant_id,
+        tenantSlug: clash.slug,
+        channelId: clash.id,
+        channelExternalId: args.harnessTelegramChatId,
+        threadId: fresh.id,
+        runId,
+        reused: true,
+      }
+    }
+    return {
+      tenantId: clash.tenant_id,
+      tenantSlug: clash.slug,
+      channelId: clash.id,
+      channelExternalId: args.harnessTelegramChatId,
+      threadId: reusedThread.id,
+      runId,
+      reused: true,
+    }
+  }
+
+  // 3. First-run provisioning: create stable tenant + channel + thread
   const [tenant] = await args.db<{ id: string }[]>`
     INSERT INTO tenants (slug, legal_name, display_name)
-    VALUES (${tenantSlug}, 'Harness Exit Gate LLC', 'Harness Exit Gate')
+    VALUES (${STABLE_HARNESS_SLUG}, 'Harness Exit Gate LLC', 'Harness Exit Gate')
     RETURNING id
   `
   if (!tenant) throw new Error('fixture: tenant insert returned no rows')
-
-  // Channel points at HARNESS_TELEGRAM_CHAT_ID — a real chat the bot can
-  // actually post to. If that chat_id clashes with an existing channel
-  // (e.g. the live internal thread) we bail out: sharing the chat would
-  // route harness traffic through the wrong tenant.
-  const [clash] = await args.db<{ id: string; tenant_id: string }[]>`
-    SELECT id, tenant_id FROM channels
-    WHERE kind = 'telegram' AND external_id = ${args.harnessTelegramChatId}
-    LIMIT 1
-  `
-  if (clash && clash.tenant_id !== tenant.id) {
-    throw new PreflightError(
-      `HARNESS_TELEGRAM_CHAT_ID ${args.harnessTelegramChatId} is already bound to tenant ${clash.tenant_id}. Use a DEDICATED test chat that no live tenant owns — the harness refuses to hijack an existing channel.`,
-    )
-  }
 
   const [channel] = await args.db<{ id: string }[]>`
     INSERT INTO channels (tenant_id, kind, external_id, is_primary, active)
@@ -274,33 +326,20 @@ async function createFixture(args: {
 
   return {
     tenantId: tenant.id,
-    tenantSlug,
+    tenantSlug: STABLE_HARNESS_SLUG,
     channelId: channel.id,
     channelExternalId: args.harnessTelegramChatId,
     threadId: thread.id,
     runId,
+    reused: false,
   }
 }
 
-async function cleanupFixture(db: Sql, fixture: HarnessFixture): Promise<void> {
-  // audit_log is append-only (trigger) AND has FK to actions without
-  // cascade, so DELETE FROM tenants will fail on the first fixture the
-  // pipeline produces audit rows for. Strategy:
-  //   1. DELETE approval_requests — cascade-safe (FK to actions cascades)
-  //   2. Drop channel — also delete-safe
-  //   3. Leave audit rows + actions + agent_runs + messages linger tagged
-  //      by the harness tenant. The per-run tenant slug makes them
-  //      trivially grep-able, and Neon branch resets are the periodic
-  //      cleanup (same posture as BLU-24/25/27/28 test suites).
-  // We still DELETE FROM tenants at the end — if it fails, we swallow
-  // and emit a warning. Harness verdict is not affected.
-  try {
-    await db`DELETE FROM tenants WHERE id = ${fixture.tenantId}`
-  } catch (err) {
-    console.warn(
-      `[harness] tenant cleanup blocked (expected if audit rows exist): ${err instanceof Error ? err.message.slice(0, 200) : String(err)}`,
-    )
-  }
+async function cleanupFixture(_db: Sql, _fixture: HarnessFixture): Promise<void> {
+  // Stable tenant persists across runs — no cleanup. Per-run state is
+  // grep-able by the `[harness:<runId>]` prefix in message text. Neon
+  // branch resets are the periodic DB cleanup (matches BLU-24/25/27/28
+  // test-suite posture for append-only audit rows).
 }
 
 // ---------------------------------------------------------------------------
