@@ -2,9 +2,17 @@ import { Hono } from 'hono'
 import { and, eq } from 'drizzle-orm'
 import { TenantId, newTenantContext } from '@bluecairn/core'
 import { createDatabase, withTenant, schema } from '@bluecairn/db'
-import { extractInboundMessage, parseUpdate } from '@bluecairn/integrations/telegram'
+import {
+  answerTelegramCallbackQuery,
+  extractCallbackQuery,
+  extractInboundMessage,
+  parseApprovalCallbackData,
+  parseUpdate,
+  type CallbackQueryPayload,
+} from '@bluecairn/integrations/telegram'
 import { env } from '../../env.js'
 import { inngest } from '../../inngest.js'
+import { bot } from '../../lib/telegram-bot.js'
 import { logger } from '../../lib/logger.js'
 
 /**
@@ -31,6 +39,7 @@ import { logger } from '../../lib/logger.js'
  */
 
 const EMIT_TIMEOUT_MS = 2000
+const ANSWER_CALLBACK_TIMEOUT_MS = 2000
 
 /**
  * Admin pool: used at the webhook boundary for channel → tenant resolution
@@ -72,6 +81,12 @@ telegramWebhook.post('/', async (c) => {
 
   const msg = extractInboundMessage(update)
   if (!msg) {
+    const callback = extractCallbackQuery(update)
+    if (callback) {
+      await handleCallbackQuery(callback, correlationId)
+      return c.json({ ok: true })
+    }
+
     logger.info('Telegram update ignored (unsupported type)', {
       correlationId,
       updateId: update.update_id,
@@ -219,3 +234,175 @@ telegramWebhook.post('/', async (c) => {
 
   return c.json({ ok: true })
 })
+
+/**
+ * BLU-24 — handle an inline-button `callback_query` update.
+ *
+ * Flow:
+ *   1. Fire `answerCallbackQuery` first so the spinner dismisses regardless
+ *      of downstream outcome (2s race; error logged, never thrown).
+ *   2. Resolve the originating chat → channel → tenant. Unknown chat_id
+ *      writes a platform-global `audit_log` row (tenant_id=null) for later
+ *      spam-detection in ops-web, no event emit.
+ *   3. Validate `callback_data` shape via `parseApprovalCallbackData`.
+ *      Malformed data writes a tenant-scoped `audit_log` row
+ *      (event_kind='callback.malformed'), no event emit.
+ *   4. Valid data → emit `approval.decision.recorded` into Inngest with
+ *      `id: callback:<callback_query_id>` so re-delivery of the same tap
+ *      dedups at ingestion (belt-and-suspenders with Telegram's own
+ *      at-least-once semantics).
+ *
+ * We intentionally do NOT check `approval_requests.id` existence here.
+ * Semantic validation belongs to BLU-25's `action.gate`; the webhook stays
+ * thin so we never blow Telegram's 5s budget on extra DB round-trips.
+ */
+async function handleCallbackQuery(
+  callback: CallbackQueryPayload,
+  correlationId: string,
+): Promise<void> {
+  // 1. Dismiss the button spinner regardless of downstream outcome. If the
+  // Telegram call fails or exceeds the budget we still continue — spinner
+  // state is cosmetic and our own decision path must not block on it.
+  let answerTimer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      answerTelegramCallbackQuery(bot, callback.callbackQueryId),
+      new Promise<never>((_, reject) => {
+        answerTimer = setTimeout(
+          () =>
+            reject(new Error(`answerCallbackQuery timeout after ${ANSWER_CALLBACK_TIMEOUT_MS}ms`)),
+          ANSWER_CALLBACK_TIMEOUT_MS,
+        )
+      }),
+    ])
+  } catch (err) {
+    logger.error('answerCallbackQuery failed', {
+      correlationId,
+      callbackQueryId: callback.callbackQueryId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  } finally {
+    if (answerTimer !== undefined) clearTimeout(answerTimer)
+  }
+
+  // 2. Channel → tenant.
+  const [channel] = await db
+    .select({ id: schema.channels.id, tenantId: schema.channels.tenantId })
+    .from(schema.channels)
+    .where(and(eq(schema.channels.externalId, callback.chatId), eq(schema.channels.kind, 'telegram')))
+    .limit(1)
+
+  if (!channel) {
+    logger.warn('Telegram callback_query: unknown chat_id', {
+      correlationId,
+      chatId: callback.chatId,
+      callbackQueryId: callback.callbackQueryId,
+    })
+    await writeCallbackAudit({
+      tenantId: null,
+      eventKind: 'callback.unknown_chat',
+      eventSummary: `unknown chat_id ${callback.chatId}`,
+      payload: {
+        callback_query_id: callback.callbackQueryId,
+        chat_id: callback.chatId,
+        data: callback.data,
+        correlation_id: correlationId,
+      },
+    })
+    return
+  }
+
+  // 3. Data-shape validation.
+  const parsed = parseApprovalCallbackData(callback.data)
+  if (!parsed) {
+    logger.warn('Telegram callback_query: malformed data', {
+      correlationId,
+      tenantId: channel.tenantId,
+      callbackQueryId: callback.callbackQueryId,
+      data: callback.data,
+    })
+    await writeCallbackAudit({
+      tenantId: channel.tenantId,
+      eventKind: 'callback.malformed',
+      eventSummary: `malformed callback_data: ${callback.data.slice(0, 64)}`,
+      payload: {
+        callback_query_id: callback.callbackQueryId,
+        chat_id: callback.chatId,
+        data: callback.data,
+        correlation_id: correlationId,
+      },
+    })
+    return
+  }
+
+  // 4. Emit the decision event.
+  const idempotencyKey = `tg:callback:${callback.callbackQueryId}`
+  let emitTimer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      inngest.send({
+        name: 'approval.decision.recorded',
+        // Inngest dedupes at ingestion when `id` repeats — duplicate Telegram
+        // re-delivery of the same tap collapses to one `action.gate` resume.
+        id: `event:${idempotencyKey}`,
+        data: {
+          tenant_id: channel.tenantId,
+          correlation_id: correlationId,
+          idempotency_key: idempotencyKey,
+          approval_request_id: parsed.approvalRequestId,
+          decision: parsed.decision,
+          user_telegram_id: callback.fromTelegramUserId,
+        },
+      }),
+      new Promise<never>((_, reject) => {
+        emitTimer = setTimeout(
+          () => reject(new Error(`inngest emit timeout after ${EMIT_TIMEOUT_MS}ms`)),
+          EMIT_TIMEOUT_MS,
+        )
+      }),
+    ])
+    logger.info('approval.decision.recorded emitted', {
+      correlationId,
+      tenantId: channel.tenantId,
+      approvalRequestId: parsed.approvalRequestId,
+      decision: parsed.decision,
+    })
+  } catch (err) {
+    // Log only — the user already sees the button dismissed; re-delivery by
+    // Telegram or manual replay from Inngest dashboard is the recovery path.
+    logger.error('Inngest emit failed (approval.decision.recorded)', {
+      correlationId,
+      tenantId: channel.tenantId,
+      approvalRequestId: parsed.approvalRequestId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  } finally {
+    if (emitTimer !== undefined) clearTimeout(emitTimer)
+  }
+}
+
+/**
+ * Best-effort audit write for callback handling failures. Never throws —
+ * audit is an observability surface, not a correctness requirement, and we
+ * must still 200 Telegram regardless of its success.
+ */
+async function writeCallbackAudit(args: {
+  tenantId: string | null
+  eventKind: 'callback.malformed' | 'callback.unknown_chat'
+  eventSummary: string
+  payload: Record<string, unknown>
+}): Promise<void> {
+  try {
+    await db.insert(schema.auditLog).values({
+      tenantId: args.tenantId,
+      eventKind: args.eventKind,
+      eventSummary: args.eventSummary,
+      eventPayload: args.payload,
+    })
+  } catch (err) {
+    logger.error('audit_log insert failed', {
+      eventKind: args.eventKind,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+}

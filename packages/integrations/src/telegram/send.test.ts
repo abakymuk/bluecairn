@@ -1,13 +1,21 @@
 import { isErr, isOk } from '@bluecairn/core'
 import type { Bot } from 'grammy'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
-import { sendTelegramMessage } from './send.js'
+import { createTelegramBot } from './bot.js'
+import { answerTelegramCallbackQuery, sendTelegramMessage } from './send.js'
 
 const mockApiSendMessage = vi.fn()
-const fakeBot = { api: { sendMessage: mockApiSendMessage } } as unknown as Bot
+const mockApiAnswerCallbackQuery = vi.fn()
+const fakeBot = {
+  api: {
+    sendMessage: mockApiSendMessage,
+    answerCallbackQuery: mockApiAnswerCallbackQuery,
+  },
+} as unknown as Bot
 
 beforeEach(() => {
   mockApiSendMessage.mockReset()
+  mockApiAnswerCallbackQuery.mockReset()
 })
 
 describe('sendTelegramMessage', () => {
@@ -141,5 +149,50 @@ describe('sendTelegramMessage', () => {
     expect(isErr(result)).toBe(true)
     if (!isErr(result)) return
     expect(result.error.kind).toBe('upstream')
+  })
+})
+
+describe('answerTelegramCallbackQuery', () => {
+  test('happy path: returns Ok(undefined)', async () => {
+    mockApiAnswerCallbackQuery.mockResolvedValueOnce(true)
+
+    const result = await answerTelegramCallbackQuery(fakeBot, 'cb-123')
+
+    expect(isOk(result)).toBe(true)
+    expect(mockApiAnswerCallbackQuery).toHaveBeenCalledWith('cb-123')
+  })
+
+  test('400 from Telegram classified as invalid_payload', async () => {
+    mockApiAnswerCallbackQuery.mockRejectedValueOnce({
+      error_code: 400,
+      description: 'Bad Request: query is too old',
+    })
+
+    const result = await answerTelegramCallbackQuery(fakeBot, 'cb-stale')
+
+    expect(isErr(result)).toBe(true)
+    if (!isErr(result)) return
+    expect(result.error.kind).toBe('invalid_payload')
+  })
+
+  test('unknown error → upstream', async () => {
+    mockApiAnswerCallbackQuery.mockRejectedValueOnce(new Error('boom'))
+
+    const result = await answerTelegramCallbackQuery(fakeBot, 'cb')
+
+    expect(isErr(result)).toBe(true)
+    if (!isErr(result)) return
+    expect(result.error.kind).toBe('upstream')
+  })
+})
+
+describe('createTelegramBot', () => {
+  test('returns a grammY Bot instance with the expected api surface', () => {
+    const botInstance = createTelegramBot('12345:fake-token-for-test')
+    // grammY's Bot exposes `.api.sendMessage` / `.api.answerCallbackQuery`
+    // without any network I/O until a call is actually made — enough for a
+    // smoke assertion that the factory wires up grammY correctly.
+    expect(typeof botInstance.api.sendMessage).toBe('function')
+    expect(typeof botInstance.api.answerCallbackQuery).toBe('function')
   })
 })

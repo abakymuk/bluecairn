@@ -22,3 +22,32 @@ export interface InboundTelegramMessage {
   /** When Telegram server saw the message (UTC). */
   readonly sentAt: Date
 }
+
+/**
+ * Normalized shape of a Telegram `callback_query` update — the payload sent
+ * when a user taps an inline-keyboard button. The webhook handler branches
+ * on `InboundTelegramMessage | CallbackQueryPayload | null` to decide what
+ * to do with an update.
+ */
+export interface CallbackQueryPayload {
+  /** Telegram's opaque callback_query id. Idempotency unit for this update. */
+  readonly callbackQueryId: string
+  /** Raw button `callback_data` string (app-defined; validated downstream). */
+  readonly data: string
+  /** Sender Telegram user id (carried in the emitted event for audit). */
+  readonly fromTelegramUserId: number
+  /** chat.id of the originating message (used for channel → tenant lookup). */
+  readonly chatId: string
+  /** `message.message_id` the buttons were attached to, when present. */
+  readonly originalMessageId: string | null
+}
+
+/**
+ * Parsed `approval:<uuid>:<decision>` callback data. Produced by
+ * `parseApprovalCallbackData`; `null` means the string did not match the
+ * expected shape (webhook writes an audit row and ignores).
+ */
+export interface ParsedApprovalCallback {
+  readonly approvalRequestId: string
+  readonly decision: 'approved' | 'rejected'
+}

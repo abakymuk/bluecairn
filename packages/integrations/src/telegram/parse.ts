@@ -1,6 +1,10 @@
 import type { Update } from 'grammy/types'
 import { z } from 'zod'
-import type { InboundTelegramMessage } from './types.js'
+import type {
+  CallbackQueryPayload,
+  InboundTelegramMessage,
+  ParsedApprovalCallback,
+} from './types.js'
 
 /**
  * Zod schema validating the subset of a Telegram Update we consume for
@@ -47,6 +51,42 @@ export const parseUpdate = (body: unknown): TelegramUpdate => {
 }
 
 /**
+ * Zod schema for the subset of a `callback_query` update we handle (inline
+ * button taps, BLU-24). Anything that doesn't shape-match returns `null`
+ * from the extractor so the webhook can 200-ignore unknown update types
+ * the same way it does for photos / edits / inline queries.
+ */
+const callbackQueryUpdateSchema = z.object({
+  update_id: z.number().int(),
+  callback_query: z.object({
+    id: z.string().min(1),
+    data: z.string().min(1),
+    from: z.object({
+      id: z.number().int(),
+    }),
+    message: z
+      .object({
+        message_id: z.number().int(),
+        chat: z.object({
+          id: z.number().int(),
+        }),
+      })
+      .optional(),
+    chat_instance: z.string().optional(),
+  }),
+})
+
+/**
+ * Approval callback_data shape: `approval:<uuid>:<decision>`.
+ *
+ * The UUID regex mirrors Postgres `uuid` canonical form (8-4-4-4-12 hex).
+ * Case-insensitive because Telegram passes `callback_data` through verbatim
+ * and we'd rather accept what we emitted.
+ */
+const APPROVAL_CALLBACK_RE =
+  /^approval:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(approved|rejected)$/i
+
+/**
  * Extract an inbound text message in our normalized shape.
  *
  * Returns `null` if the update is not something we want to persist yet — for
@@ -77,5 +117,57 @@ export const extractInboundMessage = (
     fromDisplayName,
     text: message.text,
     sentAt: new Date(message.date * 1000),
+  }
+}
+
+/**
+ * Extract an inline-button tap (`callback_query`) in our normalized shape.
+ *
+ * Returns `null` if the update is not a callback_query or doesn't pass the
+ * Zod shape check. The webhook is expected to treat that as an unsupported
+ * update type and ack with 200.
+ *
+ * Semantic validation of `data` (e.g. `approval:<uuid>:<decision>`) is
+ * intentionally separate — see `parseApprovalCallbackData`. The webhook
+ * calls both and audits on data-shape failure.
+ */
+export const extractCallbackQuery = (update: TelegramUpdate): CallbackQueryPayload | null => {
+  const parsed = callbackQueryUpdateSchema.safeParse(update)
+  if (!parsed.success) return null
+
+  const cq = parsed.data.callback_query
+  const chatId = cq.message ? String(cq.message.chat.id) : ''
+  if (chatId === '') return null // buttons must belong to a chat for channel lookup
+
+  return {
+    callbackQueryId: cq.id,
+    data: cq.data,
+    fromTelegramUserId: cq.from.id,
+    chatId,
+    originalMessageId: cq.message ? String(cq.message.message_id) : null,
+  }
+}
+
+/**
+ * Parse `approval:<uuid>:<decision>` callback_data into an approval request
+ * reference. `null` signals a shape mismatch — the webhook writes an
+ * `audit_log` row (`event_kind='callback.malformed'`) and 200s.
+ *
+ * Semantic existence of `approval_request_id` is NOT checked here; that is
+ * BLU-25's `action.gate` responsibility. Webhook stays thin per ADR and per
+ * Telegram's 5s budget.
+ */
+export const parseApprovalCallbackData = (data: string): ParsedApprovalCallback | null => {
+  const match = APPROVAL_CALLBACK_RE.exec(data)
+  if (!match) return null
+
+  const approvalRequestId = match[1]?.toLowerCase()
+  const decisionRaw = match[2]?.toLowerCase()
+  if (approvalRequestId === undefined || decisionRaw === undefined) return null
+  if (decisionRaw !== 'approved' && decisionRaw !== 'rejected') return null
+
+  return {
+    approvalRequestId,
+    decision: decisionRaw,
   }
 }

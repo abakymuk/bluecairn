@@ -18,15 +18,30 @@ import postgres from 'postgres'
  */
 
 // Stub the Inngest client so we can assert on emits without hitting the wire.
-const { mockInngestSend } = vi.hoisted(() => ({
+const { mockInngestSend, mockAnswerCallbackQuery, mockSendMessage } = vi.hoisted(() => ({
   mockInngestSend: vi.fn().mockResolvedValue(undefined),
+  mockAnswerCallbackQuery: vi.fn().mockResolvedValue(true),
+  mockSendMessage: vi.fn(),
 }))
 
 vi.mock('../src/inngest.js', () => ({
   inngest: { send: mockInngestSend },
 }))
 
-// Import after vi.mock so the webhook's `inngest` resolves to the stub.
+// BLU-24: stub the singleton grammY Bot so `answerCallbackQuery` never hits
+// Telegram. The webhook only uses `bot.api.answerCallbackQuery`; the
+// `sendMessage` stub is defensive in case a future refactor starts routing
+// outbound sends through this singleton.
+vi.mock('../src/lib/telegram-bot.js', () => ({
+  bot: {
+    api: {
+      answerCallbackQuery: mockAnswerCallbackQuery,
+      sendMessage: mockSendMessage,
+    },
+  },
+}))
+
+// Import after vi.mock so the webhook's `inngest` + `bot` resolve to the stubs.
 const { app } = await import('../src/index.js')
 
 const adminUrl = process.env.DATABASE_URL_ADMIN
@@ -61,12 +76,20 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  // audit_log is append-only by trigger (ARCHITECTURE.md principle #9,
+  // migrations-manual/0003_audit_triggers.sql) — we cannot DELETE the BLU-24
+  // callback.* rows this run produced. Tests scope assertions by per-run
+  // unique callback_query_id so leaked rows do not collide across runs. Dev
+  // DBs grow these rows slowly; a Neon branch reset is the periodic cleanup.
   await admin`DELETE FROM tenants WHERE slug LIKE ${`${TEST_PREFIX}%`}`
   await admin.end()
 })
 
 beforeEach(() => {
   mockInngestSend.mockClear()
+  mockAnswerCallbackQuery.mockClear()
+  mockAnswerCallbackQuery.mockResolvedValue(true)
+  mockSendMessage.mockClear()
 })
 
 /**
@@ -95,6 +118,31 @@ const postWebhook = (body: unknown, secret: string | null = webhookSecret) => {
     }),
   )
 }
+
+/**
+ * Build a minimal Telegram `callback_query` update. Unique `callback_query_id`
+ * per test to exercise Inngest event.id dedup (BLU-24).
+ */
+const mockCallbackUpdate = (opts: {
+  callbackQueryId: string
+  data: string
+  chatId?: string
+  fromId?: number
+  messageId?: number
+}) => ({
+  update_id: Math.floor(Math.random() * 1e9),
+  callback_query: {
+    id: opts.callbackQueryId,
+    data: opts.data,
+    from: { id: opts.fromId ?? 99_999, first_name: 'Vlad' },
+    message: {
+      message_id: opts.messageId ?? 1001,
+      date: Math.floor(Date.now() / 1000),
+      chat: { id: parseInt(opts.chatId ?? TEST_CHAT_ID, 10) },
+    },
+    chat_instance: 'ci-test',
+  },
+})
 
 describe('Telegram webhook', () => {
   test('persists inbound text message for a known channel + emits event (BLU-19)', async () => {
@@ -202,17 +250,143 @@ describe('Telegram webhook', () => {
     expect(res.status).toBe(401)
   })
 
-  test('unsupported update type (no message) → 200, no persistence', async () => {
+  test('unsupported update type (callback_query without message) → 200, no emit, no audit', async () => {
     const res = await postWebhook({
       update_id: Math.floor(Math.random() * 1e9),
       callback_query: {
-        id: 'cb1',
+        id: 'cb-no-msg',
         from: { id: 1, first_name: 'X' },
         data: 'click',
         chat_instance: 'x',
       },
     })
     expect(res.status).toBe(200)
+    expect(mockInngestSend).not.toHaveBeenCalled()
+    expect(mockAnswerCallbackQuery).not.toHaveBeenCalled()
+
+    const audits = await admin<{ id: string }[]>`
+      SELECT id FROM audit_log WHERE event_payload->>'callback_query_id' = 'cb-no-msg'
+    `
+    expect(audits).toHaveLength(0)
+  })
+
+  // ---------------------------------------------------------------------------
+  // BLU-24: callback_query webhook branch
+  // ---------------------------------------------------------------------------
+
+  test('valid approval callback → answerCallbackQuery + emit approval.decision.recorded, no audit', async () => {
+    const approvalRequestId = '11111111-2222-3333-4444-555555555555'
+    const callbackQueryId = `cb-${crypto.randomUUID().slice(0, 8)}`
+    const update = mockCallbackUpdate({
+      callbackQueryId,
+      data: `approval:${approvalRequestId}:approved`,
+    })
+
+    const res = await postWebhook(update)
+    expect(res.status).toBe(200)
+
+    expect(mockAnswerCallbackQuery).toHaveBeenCalledTimes(1)
+    expect(mockAnswerCallbackQuery).toHaveBeenCalledWith(callbackQueryId)
+
+    expect(mockInngestSend).toHaveBeenCalledTimes(1)
+    expect(mockInngestSend).toHaveBeenCalledWith({
+      name: 'approval.decision.recorded',
+      id: `event:tg:callback:${callbackQueryId}`,
+      data: expect.objectContaining({
+        tenant_id: tenantId,
+        approval_request_id: approvalRequestId,
+        decision: 'approved',
+        user_telegram_id: 99_999,
+        idempotency_key: `tg:callback:${callbackQueryId}`,
+        correlation_id: expect.any(String),
+      }),
+    })
+
+    const audits = await admin<{ id: string }[]>`
+      SELECT id FROM audit_log
+      WHERE event_payload->>'callback_query_id' = ${callbackQueryId}
+    `
+    expect(audits).toHaveLength(0)
+  })
+
+  test('malformed callback data → audit (tenant-scoped), no emit, spinner still dismissed', async () => {
+    const callbackQueryId = `cb-bad-${crypto.randomUUID().slice(0, 8)}`
+    const update = mockCallbackUpdate({
+      callbackQueryId,
+      data: 'approval:not-a-uuid:maybe',
+    })
+
+    const res = await postWebhook(update)
+    expect(res.status).toBe(200)
+
+    expect(mockAnswerCallbackQuery).toHaveBeenCalledWith(callbackQueryId)
+    expect(mockInngestSend).not.toHaveBeenCalled()
+
+    const audits = await admin<
+      { id: string; tenant_id: string | null; event_kind: string; event_payload: unknown }[]
+    >`
+      SELECT id, tenant_id, event_kind, event_payload
+      FROM   audit_log
+      WHERE  event_payload->>'callback_query_id' = ${callbackQueryId}
+    `
+    expect(audits).toHaveLength(1)
+    expect(audits[0]?.tenant_id).toBe(tenantId)
+    expect(audits[0]?.event_kind).toBe('callback.malformed')
+    expect(audits[0]?.event_payload).toMatchObject({
+      callback_query_id: callbackQueryId,
+      data: 'approval:not-a-uuid:maybe',
+      chat_id: TEST_CHAT_ID,
+    })
+  })
+
+  test('unknown chat_id callback → audit (tenant_id=null), no emit', async () => {
+    const strangerChatId = '-777111333'
+    const callbackQueryId = `cb-stranger-${crypto.randomUUID().slice(0, 8)}`
+    const update = mockCallbackUpdate({
+      callbackQueryId,
+      data: `approval:11111111-2222-3333-4444-555555555555:rejected`,
+      chatId: strangerChatId,
+    })
+
+    const res = await postWebhook(update)
+    expect(res.status).toBe(200)
+
+    // Spinner still gets dismissed — we answer before resolving the channel.
+    expect(mockAnswerCallbackQuery).toHaveBeenCalledWith(callbackQueryId)
+    expect(mockInngestSend).not.toHaveBeenCalled()
+
+    const audits = await admin<
+      { id: string; tenant_id: string | null; event_kind: string }[]
+    >`
+      SELECT id, tenant_id, event_kind
+      FROM   audit_log
+      WHERE  event_payload->>'callback_query_id' = ${callbackQueryId}
+    `
+    expect(audits).toHaveLength(1)
+    expect(audits[0]?.tenant_id).toBeNull()
+    expect(audits[0]?.event_kind).toBe('callback.unknown_chat')
+  })
+
+  test('duplicate callback delivery: app emits both times with same id (Inngest dedups at ingestion)', async () => {
+    const approvalRequestId = '11111111-2222-3333-4444-555555555555'
+    const callbackQueryId = `cb-dup-${crypto.randomUUID().slice(0, 8)}`
+    const payload = mockCallbackUpdate({
+      callbackQueryId,
+      data: `approval:${approvalRequestId}:approved`,
+    })
+
+    const res1 = await postWebhook(payload)
+    const res2 = await postWebhook(payload)
+    expect(res1.status).toBe(200)
+    expect(res2.status).toBe(200)
+
+    // Both requests emit — we rely on Inngest `event.id` ingestion dedup
+    // rather than an app-layer cache. This mirrors the BLU-19 posture of
+    // trusting the durability layer to collapse retries.
+    expect(mockInngestSend).toHaveBeenCalledTimes(2)
+    const calls = mockInngestSend.mock.calls
+    expect(calls[0]?.[0]?.id).toBe(`event:tg:callback:${callbackQueryId}`)
+    expect(calls[1]?.[0]?.id).toBe(`event:tg:callback:${callbackQueryId}`)
   })
 
   test('invalid JSON body → 400', async () => {
