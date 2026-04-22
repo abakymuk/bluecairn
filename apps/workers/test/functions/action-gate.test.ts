@@ -372,7 +372,8 @@ describe('handleActionGate', () => {
     expect(audits.map((a) => a.event_kind)).toEqual(['approval.expired'])
   })
 
-  test('duplicate handler invocation: single approval_request, single prompt send (comms idempotency)', async () => {
+  test('replay after terminal status: short-circuits with same outcome, no new sends/audits', async () => {
+    // First pass — drive the action all the way to executed.
     const actionId = await insertAction('Will check in with you later.')
     const fakeStep1 = makeFakeStep()
     const send = captureSend()
@@ -388,53 +389,50 @@ describe('handleActionGate', () => {
       },
     })
 
-    await handleActionGate({
+    const first = await handleActionGate({
       event: makeEvent(actionId),
       step: fakeStep1,
       dbOverride: db,
       sendMessageImpl: send.impl,
     })
+    expect(first.outcome).toBe('executed')
+    expect(send.calls).toHaveLength(2) // prompt + dispatch
 
-    // Second invocation — should re-use the existing approval_request and
-    // skip re-inserting. Because our `send.impl` is a fresh closure per call,
-    // the first call inserted a `tool_calls` row for the prompt; the SECOND
-    // attempt's real `sendMessage` (not our test impl) would see it cached —
-    // but since we pass the same `send.impl`, we just track that the gate
-    // itself does not insert a second approval_requests row.
+    // Second invocation — action.status is already 'executed', so the
+    // replay short-circuit in load-action must fire BEFORE send / wait /
+    // audit steps. No duplicate audit rows, no duplicate Telegram calls.
     const fakeStep2 = makeFakeStep()
-    fakeStep2.waitForEvent.mockResolvedValueOnce({
-      data: {
-        tenant_id: tenantId,
-        correlation_id: 'second-pass-corr',
-        idempotency_key: 'tg:callback:cb-dup',
-        approval_request_id: 'placeholder',
-        decision: 'approved' as const,
-        user_telegram_id: 123,
-      },
-    })
 
-    await handleActionGate({
+    const second = await handleActionGate({
       event: makeEvent(actionId),
       step: fakeStep2,
       dbOverride: db,
       sendMessageImpl: send.impl,
     })
 
-    // Exactly ONE approval_request row across both invocations
+    expect(second.outcome).toBe('executed')
+    expect(second.action_id).toBe(first.action_id)
+    expect(second.approval_request_id).toBe(first.approval_request_id)
+
+    // waitForEvent must NOT have been called on the replay pass — the
+    // short-circuit returns before step 3.
+    expect(fakeStep2.waitForEvent).not.toHaveBeenCalled()
+
+    // send.calls stays at 2 — no additional prompt or dispatch on replay.
+    expect(send.calls).toHaveLength(2)
+
+    // Still exactly ONE approval_request row.
     const apprRows = await admin<{ id: string }[]>`
       SELECT id FROM approval_requests WHERE action_id = ${actionId}
     `
     expect(apprRows).toHaveLength(1)
 
-    // action.gate is allowed to call sendMessage with the same
-    // idempotency key on the second pass — the real Comms MCP dedups at the
-    // tool_calls layer (BLU-21), so Telegram is not re-called. Assert that
-    // every send.calls entry has a valid idempotency_key we recognize.
-    for (const call of send.calls) {
-      expect(call.idempotencyKey).toMatch(
-        new RegExp(`^(approval-prompt|action-dispatch):${actionId}$`),
-      )
-    }
+    // Audit rows match the single run: granted + executed. No duplicates.
+    const audits = await admin<{ event_kind: string }[]>`
+      SELECT event_kind FROM audit_log WHERE action_id = ${actionId}
+      ORDER BY occurred_at ASC
+    `
+    expect(audits.map((a) => a.event_kind)).toEqual(['approval.granted', 'action.executed'])
   })
 
   test('wrong policy_outcome short-circuits with outcome=skipped', async () => {

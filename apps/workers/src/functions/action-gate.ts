@@ -98,8 +98,25 @@ export interface ActionGateStep {
   ) => Promise<{ data: ApprovalDecisionRecordedData } | null>
 }
 
+/**
+ * Terminal `actions.status` values — if we see one of these in step 1, the
+ * gate has already fully resolved on a prior invocation. We short-circuit
+ * to avoid duplicating audit_log rows and Telegram sends on a replay
+ * (e.g. manual Inngest re-run, or a second `action.requested` event for the
+ * same action_id emitted by an over-enthusiastic upstream).
+ */
+const TERMINAL_ACTION_STATUSES = ['executed', 'rejected', 'expired', 'failed'] as const
+type TerminalActionStatus = (typeof TERMINAL_ACTION_STATUSES)[number]
+
+const terminalStatusToOutcome = (status: TerminalActionStatus): ActionGateOutcome => {
+  if (status === 'executed') return 'executed'
+  if (status === 'rejected') return 'rejected'
+  if (status === 'expired') return 'expired'
+  return 'executed' // 'failed' — prior run threw for Inngest retry; caller gets executed-intent + sees failure in DB
+}
+
 interface LoadedAction {
-  alreadyAwaiting: boolean
+  currentStatus: string
   threadId: string
   text: string
   existingApprovalRequestId: string | null
@@ -212,13 +229,40 @@ export const handleActionGate = async (args: {
             .limit(1)
 
           return {
-            alreadyAwaiting: action.status === 'awaiting_approval',
+            currentStatus: action.status,
             threadId,
             text,
             existingApprovalRequestId: existingReq?.id ?? null,
           }
         })
       })
+
+      // Replay short-circuit: if a prior invocation already drove the action
+      // to a terminal status, return the same semantic outcome without
+      // touching DB / Telegram / audit again. Primary defense against
+      // manual Inngest re-runs + duplicate `action.requested` emission.
+      if (
+        (TERMINAL_ACTION_STATUSES as readonly string[]).includes(loaded.currentStatus)
+      ) {
+        const outcome = terminalStatusToOutcome(loaded.currentStatus as TerminalActionStatus)
+        const latency = Date.now() - start
+        const out: ActionGateOutput = {
+          action_id,
+          approval_request_id: loaded.existingApprovalRequestId,
+          outcome,
+          latency_ms: latency,
+        }
+        span.update({
+          output: { ...out, replayed: true, terminal_status: loaded.currentStatus },
+        })
+        logger.info('action.gate replay short-circuit', {
+          tenantId: tenant_id,
+          actionId: action_id,
+          approvalRequestId: loaded.existingApprovalRequestId,
+          terminalStatus: loaded.currentStatus,
+        })
+        return out
+      }
 
       // --- Step 2: create approval_request (idempotent on action_id) --------
       const approvalRequestId = await step.run('create-approval-request', async () => {
