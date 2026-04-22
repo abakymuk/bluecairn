@@ -87,20 +87,39 @@ logger.info('workers starting', { port: env.PORT, env: env.NODE_ENV })
 // Idempotent: Inngest's PUT handler is safe to re-invoke. If the call fails
 // transiently, Inngest Cloud will still discover functions lazily via its own
 // next-event-triggered sync.
+//
+// Retry loop (not a fixed setTimeout): on a cold Railway container the Inngest
+// `serve()` handler can return 4xx for the first few seconds after module load
+// even though the Hono listener is up. Retry on both 4xx and network errors
+// until we see a 2xx or exhaust the budget.
+async function selfSyncInngest(): Promise<void> {
+  const url = `http://localhost:${env.PORT}/api/inngest`
+  const maxAttempts = 10
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const r = await fetch(url, { method: 'PUT' })
+      if (r.ok) {
+        logger.info('inngest self-sync', { status: r.status, attempt })
+        return
+      }
+      logger.warn('inngest self-sync retry', { status: r.status, attempt })
+    } catch (e: unknown) {
+      logger.warn('inngest self-sync error', {
+        attempt,
+        err: e instanceof Error ? e.message : String(e),
+      })
+    }
+    await new Promise((res) => setTimeout(res, 3000))
+  }
+  logger.error('inngest self-sync gave up', { attempts: maxAttempts })
+}
+
 if (
   env.INNGEST_SIGNING_KEY !== undefined &&
   env.NODE_ENV !== 'development' &&
   env.NODE_ENV !== 'test'
 ) {
-  setTimeout(() => {
-    void fetch(`http://localhost:${env.PORT}/api/inngest`, { method: 'PUT' })
-      .then((r) => logger.info('inngest self-sync', { status: r.status }))
-      .catch((e: unknown) =>
-        logger.warn('inngest self-sync failed', {
-          err: e instanceof Error ? e.message : String(e),
-        }),
-      )
-  }, 3000)
+  void selfSyncInngest()
 }
 
 export default {
