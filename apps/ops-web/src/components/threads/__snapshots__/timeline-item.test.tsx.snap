@@ -153,6 +153,17 @@ exports[`<TimelineItem /> — snapshots + explicit assertions > kind=agent_run >
          
         417ms
       </p>
+      <p
+        class="text-xs"
+      >
+        <span
+          class="font-medium"
+        >
+          completed:
+        </span>
+         
+        4 minutes ago
+      </p>
     </div>
   </div>
   <time
